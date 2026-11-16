@@ -1,4 +1,4 @@
-﻿dataset_id,gse,perturbagen,cell_type,platform,treat_regex,ctrl_regex,gt_components,gt_pathways,notes
+dataset_id,gse,perturbagen,cell_type,platform,treat_regex,ctrl_regex,gt_components,gt_pathways,notes
 rapamycin_nk,GSE318529,rapamycin,in-vitro-derived NK cells (stage 4-5),RNA-seq,rapamycin,DMSO,mTORC1 inhibition|translational/ribosomal suppression,mTOR signaling|PI3K-Akt signaling|Ribosome,Compare 15-C condition rapamycin vs DMSO only; verify sample titles at download
 dexamethasone_organoid,GSE304202,dexamethasone,patient-derived airway organoids,RNA-seq,Dexamethasone,Control,glucocorticoid receptor (NR3C1) activation|anti-inflammatory/immunosuppressive response,Glucocorticoid receptor signaling|NF-kB regulation,6 control vs 6 Dex; sex-balanced
 vorinostat_a498,GSE319257,vorinostat (SAHA),A498 renal carcinoma cells,RNA-seq,vorinostat,mock|DMSO|vehicle,histone deacetylase (HDAC) inhibition|chromatin hyperacetylation|cell-cycle arrest (p21/CDKN1A),HDAC/chromatin remodeling|Cell cycle,Factorial design with siBPGM; restrict to mock-transfected arm at download
