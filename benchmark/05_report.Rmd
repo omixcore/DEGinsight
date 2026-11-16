@@ -1,59 +1,156 @@
 ---
-title: "DEGinsight benchmark: mechanism recovery, hallucination and cost"
-output: html_document
+title: "LLM-assisted interpretation of differential expression: a mechanism-recovery benchmark"
+subtitle: "DEGinsight benchmark report"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: hide
+    theme: flatly
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
-library(ggplot2)
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE,
+                      fig.width = 8, fig.height = 4.2)
+suppressPackageStartupMessages(library(ggplot2))
 bench <- read.csv("scores/benchmark_summary.csv", stringsAsFactors = FALSE)
 abl <- if (file.exists("scores/ablation_summary.csv"))
-  read.csv("scores/ablation_summary.csv") else NULL
+  read.csv("scores/ablation_summary.csv", stringsAsFactors = FALSE) else NULL
+gt <- read.csv("ground_truth.csv", stringsAsFactors = FALSE, check.names = FALSE)
+ranking <- read.csv("scores/model_ranking.csv", stringsAsFactors = FALSE)
+bench$model <- factor(bench$model, levels = ranking$model)
+theme_set(theme_minimal(base_size = 11))
 ```
 
-## Model ranking
+# 1. What was measured
+
+Every dataset is a public perturbation experiment whose mechanism is
+established independently of the transcriptome (drug target, receptor, or
+knockout), so an interpretation can be scored against a ground truth rather
+than against plausibility. For each dataset DEGinsight runs the same
+pipeline — ORA against MSigDB Hallmark, ontology-constrained prompt, one LLM
+call, validation — and the resulting mechanistic hypotheses are compared with
+three pre-registered mechanism components per dataset.
 
 ```{r}
-knitr::kable(read.csv("scores/model_ranking.csv"), digits = 3,
-             caption = "Per-model mean mechanism-recovery (keyword + judge), hallucination rate and cost per dataset")
+knitr::kable(
+  data.frame(dataset = gt$dataset_id, GEO = gt$gse,
+             perturbation = gt$perturbagen, system = gt$cell_type,
+             `ground-truth components` = gsub("\\|", "; ", gt$gt_components),
+             check.names = FALSE),
+  caption = "Benchmark datasets and their pre-registered mechanism ground truth."
+)
 ```
 
-## Recovery vs hallucination per dataset
+Three quantities are reported per run: **mechanism recovery** (fraction of
+ground-truth components the interpretation recovers), **hallucination rate**
+(fraction of cited pathways absent from both the input enrichment table and
+the controlled vocabulary), and **cost** (tokens actually billed × published
+per-token price).
 
-```{r fig.width=8, fig.height=4}
-ggplot(bench, aes(x = model, y = recovery_keyword, fill = model)) +
-  geom_col(position = "dodge") +
-  facet_wrap(~ dataset) + ylim(0, 1) +
-  labs(y = "mechanism recovery rate", title = "Ground-truth mechanism recovery") +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "none")
-
-ggplot(bench, aes(x = model, y = hallucination_rate, fill = model)) +
-  geom_col() + facet_wrap(~ dataset) +
-  labs(y = "hallucination rate", title = "Hallucinated pathway citations") +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "none")
-```
-
-## Cost-performance trade-off
+# 2. Headline result
 
 ```{r}
-agg <- aggregate(cbind(recovery_keyword, cost_usd) ~ model, bench, mean, na.rm = TRUE)
-ggplot(agg, aes(cost_usd, recovery_keyword, label = model)) +
-  geom_point(size = 3) + geom_text(vjust = -1) +
-  labs(x = "mean cost per dataset (USD)", y = "mean recovery rate")
+agg <- aggregate(cbind(recovery_keyword, recovery_judge, hallucination_rate,
+                       cost_usd, completion_tokens) ~ model, bench,
+                 mean, na.rm = TRUE, na.action = na.pass)
+knitr::kable(agg, digits = 3,
+             caption = "Mean performance per model across all datasets.")
 ```
 
-## Ablation
+```{r}
+per_ds <- aggregate(recovery_keyword ~ dataset + model, bench, mean,
+                    na.action = na.pass)
+ggplot(per_ds, aes(reorder(dataset, recovery_keyword), recovery_keyword,
+                   fill = model)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.75) +
+  coord_flip() + ylim(0, 1) +
+  labs(x = NULL, y = "mechanism recovery rate", fill = "model",
+       title = "Recovery of the established mechanism, by dataset")
+```
+
+# 3. Does it hallucinate?
+
+```{r}
+ggplot(bench, aes(model, hallucination_rate, fill = model)) +
+  geom_col(width = 0.6) + facet_wrap(~ dataset) + ylim(0, 1) +
+  labs(x = NULL, y = "hallucination rate",
+       title = "Cited pathways that exist in neither the input nor the vocabulary") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "none")
+```
+
+# 4. Cost-performance trade-off
+
+```{r}
+ggplot(agg, aes(cost_usd, recovery_keyword, label = model, colour = model)) +
+  geom_point(size = 3.5) +
+  geom_text(vjust = -1, size = 3.2, show.legend = FALSE) +
+  scale_x_log10() +
+  coord_cartesian(ylim = c(0, 1.05)) +
+  labs(x = "mean cost per dataset (USD, log scale)", y = "mean recovery rate",
+       title = "You get what you pay for — but the floor is high")
+```
+
+# 5. Ablation: prompt design
+
+The ablation grid varies three factors that a user actually controls:
+few-shot exemplar (on/off), number of pathways shown to the model
+(5/10/20/30), and whether tissue context is supplied.
 
 ```{r}
 if (!is.null(abl)) {
-  print(ggplot(abl, aes(factor(top_n), recovery_keyword, color = few_shot,
-                        group = few_shot)) +
-          stat_summary(fun = mean, geom = "line") +
-          stat_summary(fun = mean, geom = "point") +
-          facet_wrap(~ tissue, labeller = label_both) +
-          labs(x = "top_n pathways", y = "mean recovery rate",
-               title = "Ablation: few-shot x top_n x tissue context"))
-  knitr::kable(aggregate(cbind(recovery_keyword, hallucination_rate) ~
-                           few_shot + top_n + tissue, abl, mean), digits = 3)
+  m <- aggregate(cbind(recovery_keyword, hallucination_rate) ~
+                   few_shot + top_n + tissue, abl, mean, na.action = na.pass)
+  ggplot(m, aes(factor(top_n), recovery_keyword, colour = factor(few_shot),
+                group = few_shot)) +
+    geom_line() + geom_point() + facet_wrap(~ tissue) +
+    coord_cartesian(ylim = c(0, 1)) +
+    labs(x = "pathways shown to the model (top_n)", y = "mean recovery rate",
+         colour = "few-shot", title = "Ablation grid (all datasets pooled)")
+  knitr::kable(m, digits = 3,
+               caption = "Recovery and hallucination by ablation configuration.")
 }
+```
+
+```{r}
+if (!is.null(abl)) {
+  cat("### Marginal effect of each factor\n\n")
+  for (f in c("few_shot", "top_n", "tissue")) {
+    cat("\n**", f, "**\n\n")
+    print(knitr::kable(aggregate(recovery_keyword ~ abl[[f]], abl, mean,
+                                 na.action = na.pass), digits = 3))
+  }
+}
+```
+
+# 6. Worked example
+
+```{r}
+ex <- bench[which.max(bench$recovery_keyword), ]
+r <- readRDS(file.path("results",
+  paste0(ex$dataset, "__", gsub("[^A-Za-z0-9]", "-", as.character(ex$model)), ".rds")))
+cat("**", as.character(ex$model), "on", ex$dataset, "**\n\n")
+for (h in r$interpretation$hypotheses) {
+  cat("- **", h$name, "** — ", h$mechanism, "\n")
+  cat("  * supported by: ",
+      paste(unlist(h$supporting_pathways), collapse = ", "), "\n")
+}
+```
+
+# 7. Reproducibility
+
+- Every LLM call is cached on disk keyed by a hash of prompt + model +
+  temperature, so this report can be regenerated byte-identically without
+  re-spending API budget (`R/cache.R`).
+- `benchmark/00_fetch_geo.sh` downloads the exact archive versions used;
+  byte sizes are pinned so a corrupted download fails loudly.
+- All prompts, model versions and prices are recorded in
+  `benchmark/results/*.rds` and `benchmark/models.csv`.
+- Scoring is two-track: a deterministic synonym-aware keyword matcher (free,
+  fully reproducible) and a model judge run **cross-model** — each output is
+  judged by a different model than the one that produced it — to limit
+  self-preference bias.
+
+```{r}
+cat("\n*Report generated:", format(Sys.time(), "%Y-%m-%d %H:%M %Z"), "*\n")
 ```

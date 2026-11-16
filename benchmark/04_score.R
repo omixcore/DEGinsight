@@ -17,10 +17,22 @@ if (requireNamespace("DEGinsight", quietly = TRUE)) {
 }
 
 GT <- read.csv("benchmark/ground_truth.csv", stringsAsFactors = FALSE,
-               check.names = FALSE)
+               check.names = FALSE, fileEncoding = "UTF-8-BOM")
 dir.create("benchmark/scores", showWarnings = FALSE, recursive = TRUE)
 RUN_JUDGE <- identical(Sys.getenv("RUN_JUDGE"), "1")
-JUDGE_MODEL <- Sys.getenv("JUDGE_MODEL", "deepseek-chat")
+JUDGE_MODEL <- Sys.getenv("JUDGE_MODEL", "deepseek-v4-pro")
+# Cross-judging: score each model's output with a *different* model, which
+# removes self-preference bias without needing a third vendor. Set
+# JUDGE_MODE=fixed to always use JUDGE_MODEL instead.
+JUDGE_MODE <- Sys.getenv("JUDGE_MODE", "cross")
+MODEL_POOL <- strsplit(Sys.getenv("BENCH_MODELS", "deepseek-flash,deepseek-v4-pro"),
+                       ",")[[1]]
+
+judge_for <- function(model) {
+  if (JUDGE_MODE != "cross") return(JUDGE_MODEL)
+  others <- setdiff(MODEL_POOL, model)
+  if (length(others)) others[1] else JUDGE_MODEL
+}
 
 cost_of <- function(interp, model) {
   usage <- interp$tokens
@@ -51,10 +63,10 @@ score_file <- function(f, run_judge = FALSE) {
     ". Canonical pathways: ", gsub("\\|", ", ", d$gt_pathways), ".")
 
   judge <- NULL
+  jm <- judge_for(r$model %||% NA_character_)
   if (run_judge) {
     judge <- tryCatch(
-      judge_mechanism(r$interpretation, gt_comp, gt_context,
-                      model = JUDGE_MODEL),
+      judge_mechanism(r$interpretation, gt_comp, gt_context, model = jm),
       error = function(e) { message("judge failed: ", e$message); NULL })
   }
 
@@ -63,11 +75,13 @@ score_file <- function(f, run_judge = FALSE) {
     model = r$model %||% NA_character_,
     recovery_keyword = kw$recovery_rate,
     recovery_judge = if (!is.null(judge)) judge$recovery_rate else NA_real_,
+    judge_model = if (!is.null(judge)) jm else NA_character_,
     hallucination_rate = r$interpretation$validation$hallucination_rate,
     n_hypotheses = length(r$interpretation$hypotheses),
     prompt_tokens = r$interpretation$tokens$prompt_tokens %||% NA_integer_,
     completion_tokens = r$interpretation$tokens$completion_tokens %||% NA_integer_,
     cost_usd = cost_of(r$interpretation, r$model %||% NA_character_),
+    elapsed_sec = r$elapsed_sec %||% NA_real_,
     stringsAsFactors = FALSE
   )
 }

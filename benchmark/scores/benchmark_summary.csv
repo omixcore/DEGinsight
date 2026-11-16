@@ -1,4 +1,4 @@
-"dataset","model","recovery_keyword","recovery_judge","hallucination_rate","n_hypotheses","prompt_tokens","completion_tokens","cost_usd"
-"dexamethasone_organoid","deepseek-chat",0.5,1,0,4,1035,1512,0.00194265
-"imatinib_k562","deepseek-chat",1,1,0,3,731,1394,0.00173077
-"rapamycin_nk","deepseek-chat",0.666666666666667,0.333333333333333,0,4,1297,1917,0.00245889
+"dataset","model","recovery_keyword","recovery_judge","judge_model","hallucination_rate","n_hypotheses","prompt_tokens","completion_tokens","cost_usd","elapsed_sec"
+"dexamethasone_organoid","deepseek-flash",0.5,NA,NA,0,4,1079,3472,0.0044901,18.1642248630524
+"rapamycin_nk","deepseek-flash",0,NA,NA,0,5,1369,3560,0.0046827,20.4719431400299
+"rapamycin_nk","deepseek-v4-pro",0.666666666666667,NA,NA,0,4,1420,9957,0.04130412,116.288297176361

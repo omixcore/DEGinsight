@@ -76,7 +76,7 @@ deg <- limma_deg(mat, groups)
 saveRDS(list(deg = deg, treat_samples = treat, ctrl_samples = ctrl),
         "benchmark/deg_tables/rapamycin_nk.rds")
 cat("rapamycin DEGs (padj<0.05, |logFC|>1):",
-    sum(deg$padj < 0.05 & abs(deg$log2FoldChange) > 1), "\n")
+    sum(deg$padj < 0.05 & abs(deg$log2FoldChange) > 1, na.rm = TRUE), "\n")
 
 # ---- dexamethasone: GSE304202, Dexa vs Control ----------------------------
 nc <- read.csv(file.path(CACHE, "GSE304202_normalized_counts.csv.gz"),
@@ -91,7 +91,7 @@ groups <- factor(c(rep("treat", length(treat)), rep("ctrl", length(ctrl))),
 deg <- limma_deg(mat, groups)
 saveRDS(list(deg = deg, treat_samples = treat, ctrl_samples = ctrl),
         "benchmark/deg_tables/dexamethasone_organoid.rds")
-cat("dexamethasone DEGs:", sum(deg$padj < 0.05 & abs(deg$log2FoldChange) > 1), "\n")
+cat("dexamethasone DEGs:", sum(deg$padj < 0.05 & abs(deg$log2FoldChange) > 1, na.rm = TRUE), "\n")
 
 # ---- imatinib: GSE321679, K562 WT imatinib vs DMSO ------------------------
 # xlsx converted to csv beforehand (python openpyxl, see README)
@@ -113,7 +113,80 @@ if (file.exists(im_csv)) {
   deg <- limma_deg(mat, groups)
   saveRDS(list(deg = deg, treat_samples = treat, ctrl_samples = ctrl),
           "benchmark/deg_tables/imatinib_k562.rds")
-  cat("imatinib DEGs:", sum(deg$padj < 0.05 & abs(deg$log2FoldChange) > 1), "\n")
+  cat("imatinib DEGs:", sum(deg$padj < 0.05 & abs(deg$log2FoldChange) > 1, na.rm = TRUE), "\n")
 } else cat("imatinib csv not ready, skipping\n")
+
+# ---- vorinostat: GSE319257, mock arm only, SAHA vs mock ------------------
+# Combined by 01c_vorinostat_xlsx.py from the per-sample GEO xlsx files.
+vo_csv <- file.path(CACHE, "GSE319257_counts.csv")
+if (file.exists(vo_csv)) {
+  vo <- read.csv(vo_csv, check.names = FALSE, stringsAsFactors = FALSE)
+  counts <- as.matrix(vo[, setdiff(colnames(vo), "gene")])
+  rownames(counts) <- make.unique(vo$gene)
+  storage.mode(counts) <- "numeric"
+  treat <- grep("mock_vorinostat", colnames(counts), value = TRUE)
+  ctrl  <- grep("mock_control",    colnames(counts), value = TRUE)
+  cat("vorinostat treat:", length(treat), "ctrl:", length(ctrl), "\n")
+  mat <- counts[, c(treat, ctrl), drop = FALSE]
+  keep <- rowSums(mat >= 10) >= 3
+  mat <- rowsum(mat[keep, , drop = FALSE], rownames(mat)[keep])  # dedupe symbols
+  groups <- factor(c(rep("treat", length(treat)), rep("ctrl", length(ctrl))),
+                   levels = c("ctrl", "treat"))
+  deg <- limma_deg(mat, groups)
+  saveRDS(list(deg = deg, treat_samples = treat, ctrl_samples = ctrl),
+          "benchmark/deg_tables/vorinostat_a498.rds")
+  cat("vorinostat DEGs:", sum(deg$padj < 0.05 & abs(deg$log2FoldChange) > 1, na.rm = TRUE), "\n")
+} else cat("vorinostat csv not ready, skipping\n")
+
+# ---- LPS: GSE297509, siRNA-ctrl arm, LPS vs mock, 2 donors ----------------
+# Per-sample files carry: Gene ID, Name (symbol), ..., unique reads (count).
+lps_dir <- file.path(CACHE, "lps")
+lps_map <- c(
+  donor1_mock = "GSM8993640_A_C_minus.txt.gz",
+  donor1_LPS  = "GSM8993641_A_C_LPS.txt.gz",
+  donor2_mock = "GSM8993646_B_C_minus.txt.gz",
+  donor2_LPS  = "GSM8993647_B_C_LPS.txt.gz")
+if (all(file.exists(file.path(lps_dir, lps_map)))) {
+  read_lps <- function(f) {
+    x <- read.delim(gzfile(file.path(lps_dir, f)), check.names = FALSE,
+                    stringsAsFactors = FALSE)
+    setNames(x[["unique reads"]], x[["Name"]])
+  }
+  lst <- lapply(lps_map, read_lps)
+  mat <- do.call(cbind, lst)
+  rownames(mat) <- sub("\\..*$", "", rownames(mat))
+  mat <- rowsum(mat, rownames(mat))
+  treat <- grep("_LPS$", colnames(mat), value = TRUE)
+  ctrl  <- grep("_mock$", colnames(mat), value = TRUE)
+  cat("LPS treat:", length(treat), "ctrl:", length(ctrl), "\n")
+  mat <- mat[rowSums(mat >= 10) >= 2, , drop = FALSE]
+  groups <- factor(c(rep("treat", length(treat)), rep("ctrl", length(ctrl))),
+                   levels = c("ctrl", "treat"))
+  deg <- limma_deg(mat[, c(treat, ctrl), drop = FALSE], groups)
+  saveRDS(list(deg = deg, treat_samples = treat, ctrl_samples = ctrl),
+          "benchmark/deg_tables/lps_macrophage.rds")
+  cat("LPS DEGs:", sum(deg$padj < 0.05 & abs(deg$log2FoldChange) > 1, na.rm = TRUE), "\n")
+} else cat("LPS per-sample files not ready, skipping\n")
+
+# ---- TNF-alpha: GSE305796, iPSC astrocytes, TNF vs untreated, 3 donors ----
+# Salmon transcript counts mapped to symbols by 01d_tnf_quant.py (mygene.info).
+tnf_csv <- file.path(CACHE, "GSE305796_counts.csv")
+if (file.exists(tnf_csv)) {
+  tf <- read.csv(tnf_csv, check.names = FALSE, stringsAsFactors = FALSE)
+  counts <- as.matrix(tf[, setdiff(colnames(tf), "gene")])
+  rownames(counts) <- tf$gene
+  storage.mode(counts) <- "numeric"
+  treat <- grep("^T", colnames(counts), value = TRUE)
+  ctrl  <- grep("^C", colnames(counts), value = TRUE)
+  cat("TNF treat:", length(treat), "ctrl:", length(ctrl), "\n")
+  mat <- counts[, c(treat, ctrl), drop = FALSE]
+  mat <- mat[rowSums(mat >= 10) >= 3, , drop = FALSE]
+  groups <- factor(c(rep("treat", length(treat)), rep("ctrl", length(ctrl))),
+                   levels = c("ctrl", "treat"))
+  deg <- limma_deg(mat, groups)
+  saveRDS(list(deg = deg, treat_samples = treat, ctrl_samples = ctrl),
+          "benchmark/deg_tables/tnf_astrocyte.rds")
+  cat("TNF DEGs:", sum(deg$padj < 0.05 & abs(deg$log2FoldChange) > 1, na.rm = TRUE), "\n")
+} else cat("TNF counts not ready, skipping\n")
 
 cat("01b done\n")

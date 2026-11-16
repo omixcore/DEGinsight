@@ -16,7 +16,7 @@ if (requireNamespace("DEGinsight", quietly = TRUE)) {
   for (f in list.files("R", full.names = TRUE)) source(f)
 }
 
-MODEL   <- Sys.getenv("ABLATION_MODEL", "deepseek-chat")
+MODEL   <- Sys.getenv("ABLATION_MODEL", "deepseek-flash")
 DATASETS <- strsplit(Sys.getenv("ABLATION_DATASETS",
                                 "rapamycin_nk,imatinib_k562,dexamethasone_organoid"), ",")[[1]]
 GRID <- expand.grid(few_shot = c(FALSE, TRUE),
@@ -33,8 +33,10 @@ gene_sets <- if (file.exists(GENE_SETS_GMT)) read_gmt(GENE_SETS_GMT) else {
 dir.create("benchmark/ablation", showWarnings = FALSE, recursive = TRUE)
 
 select_degs <- function(deg, padj = 0.05, logfc = 1, top_n = 150) {
-  sig <- deg$padj < padj & abs(deg$log2FoldChange) > logfc
+  ok <- !is.na(deg$padj) & !is.na(deg$log2FoldChange)
+  sig <- ok & deg$padj < padj & abs(deg$log2FoldChange) > logfc
   if (sum(sig) >= 20) return(deg$symbol[sig])
+  deg <- deg[ok, ]
   deg <- deg[order(deg$padj), ]
   up <- deg$symbol[deg$log2FoldChange > 0][seq_len(min(top_n / 2, sum(deg$log2FoldChange > 0)))]
   dn <- deg$symbol[deg$log2FoldChange < 0][seq_len(min(top_n / 2, sum(deg$log2FoldChange < 0)))]

@@ -1,7 +1,10 @@
 # 02_run_benchmark.R — run DEGinsight over datasets x models
 #
 # Run from the package root:  Rscript benchmark/02_run_benchmark.R
-# Requires: Sys.setenv(LLM_API_KEY=..., LLM_BASE_URL=...)
+# Requires: credentials for at least one model (see benchmark/models.csv)
+#   LLM_API_KEY / LLM_BASE_URL          -> DeepSeek models
+#   MOONSHOT_API_KEY                    -> kimi-k2       (optional)
+#   OPENAI_API_KEY                      -> gpt-4o-mini   (optional)
 # Results: benchmark/results/<dataset>__<model>.rds  (safe to re-run;
 #          completed combos are skipped; LLM responses are disk-cached)
 
@@ -14,15 +17,27 @@ if (requireNamespace("DEGinsight", quietly = TRUE)) {
 }
 
 # ---- configuration --------------------------------------------------------
-MODELS <- strsplit(Sys.getenv("BENCH_MODELS", "deepseek-chat"), ",")[[1]]
 GENE_SETS_GMT <- Sys.getenv("BENCH_GMT", "benchmark/gene_sets.gmt")
-# Provide a GMT (e.g. MSigDB Hallmark h.all.*.symbols.gmt) at the path above,
-# or leave empty to use the small bundled example_gene_sets for a dry run.
-
 PADJ <- 0.05; LOGFC <- 1; TOP_N <- 20
 
+# Models to evaluate. models.csv keeps the per-vendor endpoint and the
+# environment variable that holds each key, so adding a provider is a
+# one-line edit rather than a code change.
+mods <- read.csv("benchmark/models.csv", stringsAsFactors = FALSE,
+               fileEncoding = "UTF-8-BOM")
+pick <- Sys.getenv("BENCH_MODELS", "")
+if (nzchar(pick)) {
+  mods <- mods[mods$model_id %in% strsplit(pick, ",")[[1]], ]
+}
+mods$base_url <- vapply(seq_len(nrow(mods)), function(i)
+  Sys.getenv(mods$base_url_env[i], mods$default_base_url[i]), "")
+mods$api_key <- vapply(mods$api_key_env, function(e) Sys.getenv(e, ""), "")
+mods <- mods[nzchar(mods$api_key), ]
+if (!nrow(mods)) stop("No usable model credentials found (see benchmark/models.csv)")
+message("models: ", paste(mods$model_id, collapse = ", "))
+
 GT <- read.csv("benchmark/ground_truth.csv", stringsAsFactors = FALSE,
-               check.names = FALSE)
+               check.names = FALSE, fileEncoding = "UTF-8-BOM")
 dir.create("benchmark/results", showWarnings = FALSE, recursive = TRUE)
 
 gene_sets <- if (file.exists(GENE_SETS_GMT)) {
@@ -35,8 +50,10 @@ gene_sets <- if (file.exists(GENE_SETS_GMT)) {
 # underpowered (small n), fall back to top-N genes by p-value so ORA still
 # has input. The fallback is logged and must be reported in the paper.
 select_degs <- function(deg, padj = 0.05, logfc = 1, top_n = 150) {
-  sig <- deg$padj < padj & abs(deg$log2FoldChange) > logfc
+  ok <- !is.na(deg$padj) & !is.na(deg$log2FoldChange)
+  sig <- ok & deg$padj < padj & abs(deg$log2FoldChange) > logfc
   if (sum(sig) >= 20) return(list(genes = deg$symbol[sig], mode = "strict"))
+  deg <- deg[ok, ]
   deg <- deg[order(deg$padj), ]
   message("  strict DEGs = ", sum(sig),
           " -> falling back to top ", top_n, " by p-value")
@@ -52,35 +69,44 @@ for (i in seq_len(nrow(GT))) {
   obj <- readRDS(deg_file)
   deg <- obj$deg
 
-  contrast <- paste0(d$perturbagen, "-treated vs control ", d$cell_type)
+  contrast <- paste0(d$perturbagen, "-treated vs control in ", d$cell_type)
   sel <- select_degs(deg)
   ora <- tryCatch(
     run_ora(sel$genes, deg$symbol, gene_sets),
     error = function(e) { message("  ORA failed: ", e$message); NULL }
   )
   if (is.null(ora)) next
+  message("== ", d$dataset_id, " (", sel$mode, " DEGs, n=", length(sel$genes),
+          ", ", nrow(ora), " pathways)")
 
-  for (m in MODELS) {
+  for (j in seq_len(nrow(mods))) {
+    m <- mods$model_id[j]
     out <- file.path("benchmark/results",
                      paste0(d$dataset_id, "__", gsub("[^A-Za-z0-9]", "-", m), ".rds"))
-    if (file.exists(out)) { message("skip (exists): ", basename(out)); next }
-    message("== ", d$dataset_id, " x ", m)
+    if (file.exists(out)) { message("  skip (exists): ", basename(out)); next }
 
+    t0 <- Sys.time()
     interp <- tryCatch(
       interpret_enrichment(ora, contrast = contrast,
                            species = "Homo sapiens", tissue = d$cell_type,
-                           model = m),
-      error = function(e) { message("  LLM failed: ", e$message); NULL }
+                           model = m, base_url = mods$base_url[j],
+                           api_key = mods$api_key[j]),
+      error = function(e) { message("  LLM failed (", m, "): ", e$message); NULL }
     )
     if (is.null(interp)) next
+    elapsed <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
 
     # deterministic keyword scoring (no extra API spend)
     kw <- score_recovery_keywords(interp, strsplit(d$gt_components, "\\|")[[1]])
 
-    saveRDS(list(dataset = d$dataset_id, model = m, ora = ora,
-                 interpretation = interp, keyword_score = kw), out)
-    message("  keyword recovery: ", kw$recovery_rate,
-            " | hallucination: ", interp$validation$hallucination_rate)
+    saveRDS(list(dataset = d$dataset_id, model = m,
+                 model_label = mods$label[j],
+                 deg_mode = sel$mode, n_degs = length(sel$genes),
+                 ora = ora, interpretation = interp, keyword_score = kw,
+                 elapsed_sec = elapsed), out)
+    message("  ", m, " keyword recovery: ", kw$recovery_rate,
+            " | hallucination: ", interp$validation$hallucination_rate,
+            " | ", round(elapsed, 1), "s")
   }
 }
 message("Benchmark run complete.")

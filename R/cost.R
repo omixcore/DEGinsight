@@ -50,12 +50,17 @@ estimate_cost <- function(enrichment,
 
 #' @noRd
 default_prices <- function() {
-  # USD per 1M tokens (2026-11 snapshot, verify before publication)
+  # USD per 1M tokens, verified against provider pricing pages 2026-11-16.
+  # DeepSeek publishes peak and off-peak rates (off-peak = 50% of peak);
+  # the peak values below are the conservative upper bound. Peak hours are
+  # 01:00-04:00 and 06:00-10:00 UTC on weekdays.
   list(
-    "deepseek-chat" = list(input = 0.27, output = 1.10),
-    "gpt-4o-mini"   = list(input = 0.15, output = 0.60),
-    "gpt-4o"        = list(input = 2.50, output = 10.00),
-    "kimi-k2"       = list(input = 0.60, output = 2.50),
-    "claude-sonnet" = list(input = 3.00, output = 15.00)
+    "deepseek-flash"   = list(input = 0.30, output = 1.20),
+    "deepseek-v4-pro"  = list(input = 1.32, output = 3.96),
+    "deepseek-chat"    = list(input = 0.27, output = 1.10),
+    "gpt-4o-mini"      = list(input = 0.15, output = 0.60),
+    "gpt-4o"           = list(input = 2.50, output = 10.00),
+    "kimi-k2"          = list(input = 0.60, output = 2.50),
+    "claude-sonnet"    = list(input = 3.00, output = 15.00)
   )
 }
