@@ -8,7 +8,13 @@
 # Optional LLM-judge scoring: set RUN_JUDGE=1 (uses API; keyword scores
 # are always computed for free).
 
-library(DEGinsight)
+lib <- "G:/WorkBuddy/2026-11-16-20-16-33/Rlib"
+if (dir.exists(lib)) .libPaths(c(lib, .libPaths()))
+if (requireNamespace("DEGinsight", quietly = TRUE)) {
+  library(DEGinsight)
+} else {
+  for (f in list.files("R", full.names = TRUE)) source(f)
+}
 
 GT <- read.csv("benchmark/ground_truth.csv", stringsAsFactors = FALSE,
                check.names = FALSE)
@@ -19,7 +25,12 @@ JUDGE_MODEL <- Sys.getenv("JUDGE_MODEL", "deepseek-chat")
 cost_of <- function(interp, model) {
   usage <- interp$tokens
   if (is.null(usage)) return(NA_real_)
-  prices <- DEGinsight:::default_prices()[[model]]
+  price_table <- if (exists("default_prices", inherits = TRUE)) {
+    default_prices()
+  } else {
+    DEGinsight:::default_prices()
+  }
+  prices <- price_table[[model]]
   if (is.null(prices)) return(NA_real_)
   (usage$prompt_tokens %||% 0) / 1e6 * prices$input +
     (usage$completion_tokens %||% 0) / 1e6 * prices$output
@@ -29,6 +40,10 @@ score_file <- function(f, run_judge = FALSE) {
   r <- readRDS(f)
   d <- GT[GT$dataset_id == r$dataset, ]
   gt_comp <- strsplit(d$gt_components, "\\|")[[1]]
+  # recompute keyword score against the CURRENT ground truth so that
+  # vocabulary refinements apply without re-calling the LLM (responses
+  # are disk-cached anyway)
+  kw <- score_recovery_keywords(r$interpretation, gt_comp)
   gt_context <- paste0(
     "Perturbation: ", d$perturbagen, " in ", d$cell_type, " (", d$gse,
     "). Established mechanism components: ",
@@ -46,7 +61,7 @@ score_file <- function(f, run_judge = FALSE) {
   data.frame(
     dataset = r$dataset,
     model = r$model %||% NA_character_,
-    recovery_keyword = r$keyword_score$recovery_rate,
+    recovery_keyword = kw$recovery_rate,
     recovery_judge = if (!is.null(judge)) judge$recovery_rate else NA_real_,
     hallucination_rate = r$interpretation$validation$hallucination_rate,
     n_hypotheses = length(r$interpretation$hypotheses),
@@ -65,7 +80,7 @@ if (length(files)) {
 
   ranking <- aggregate(
     cbind(recovery_keyword, recovery_judge, hallucination_rate, cost_usd) ~ model,
-    bench, mean, na.rm = TRUE)
+    bench, mean, na.rm = TRUE, na.action = na.pass)
   ranking <- ranking[order(-ranking$recovery_keyword), ]
   write.csv(ranking, "benchmark/scores/model_ranking.csv", row.names = FALSE)
   print(ranking)

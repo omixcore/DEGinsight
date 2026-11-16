@@ -59,8 +59,8 @@ call_llm <- function(prompt,
   if (!is.null(response_schema)) {
     prompt <- paste0(
       prompt,
-      "\n\nRespond with a single JSON object matching this schema ",
-      "(field: type):\n",
+      "\n\nRespond with a single JSON object (json only, no prose) ",
+      "matching this schema (field: type):\n",
       jsonlite::toJSON(response_schema, auto_unbox = TRUE, pretty = TRUE)
     )
   }
@@ -81,12 +81,18 @@ call_llm <- function(prompt,
     }
   }
 
+  # DeepSeek requires json_object mode (and the word "json" in the prompt)
+  # only when we actually ask for structured output.
+  if (!is.null(response_schema)) {
+    body$response_format <- list(type = "json_object")
+  }
+
   req <- httr2::request(paste0(base_url, "/chat/completions")) |>
     httr2::req_headers(
       Authorization = paste("Bearer", api_key),
       `Content-Type` = "application/json"
     ) |>
-    httr2::req_body_json(c(body, list(response_format = list(type = "json_object")))) |>
+    httr2::req_body_json(body) |>
     httr2::req_retry(max_tries = max_retry, backoff = ~ 2^.x)
 
   resp <- httr2::req_perform(req)

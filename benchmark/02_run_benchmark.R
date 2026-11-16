@@ -5,10 +5,16 @@
 # Results: benchmark/results/<dataset>__<model>.rds  (safe to re-run;
 #          completed combos are skipped; LLM responses are disk-cached)
 
-library(DEGinsight)
+lib <- "G:/WorkBuddy/2026-11-16-20-16-33/Rlib"
+if (dir.exists(lib)) .libPaths(c(lib, .libPaths()))
+if (requireNamespace("DEGinsight", quietly = TRUE)) {
+  library(DEGinsight)
+} else {
+  for (f in list.files("R", full.names = TRUE)) source(f)
+}
 
 # ---- configuration --------------------------------------------------------
-MODELS <- c("deepseek-chat", "gpt-4o-mini", "kimi-k2")  # edit as needed
+MODELS <- strsplit(Sys.getenv("BENCH_MODELS", "deepseek-chat"), ",")[[1]]
 GENE_SETS_GMT <- Sys.getenv("BENCH_GMT", "benchmark/gene_sets.gmt")
 # Provide a GMT (e.g. MSigDB Hallmark h.all.*.symbols.gmt) at the path above,
 # or leave empty to use the small bundled example_gene_sets for a dry run.
@@ -25,6 +31,20 @@ gene_sets <- if (file.exists(GENE_SETS_GMT)) {
   data(example_data); example_gene_sets
 }
 
+# Adaptive DEG selection: strict DE thresholds first; when the design is
+# underpowered (small n), fall back to top-N genes by p-value so ORA still
+# has input. The fallback is logged and must be reported in the paper.
+select_degs <- function(deg, padj = 0.05, logfc = 1, top_n = 150) {
+  sig <- deg$padj < padj & abs(deg$log2FoldChange) > logfc
+  if (sum(sig) >= 20) return(list(genes = deg$symbol[sig], mode = "strict"))
+  deg <- deg[order(deg$padj), ]
+  message("  strict DEGs = ", sum(sig),
+          " -> falling back to top ", top_n, " by p-value")
+  up <- deg$symbol[deg$log2FoldChange > 0][seq_len(min(top_n / 2, sum(deg$log2FoldChange > 0)))]
+  dn <- deg$symbol[deg$log2FoldChange < 0][seq_len(min(top_n / 2, sum(deg$log2FoldChange < 0)))]
+  list(genes = intersect(unique(c(up, dn)), deg$symbol), mode = "topN")
+}
+
 for (i in seq_len(nrow(GT))) {
   d <- GT[i, ]
   deg_file <- file.path("benchmark/deg_tables", paste0(d$dataset_id, ".rds"))
@@ -33,9 +53,9 @@ for (i in seq_len(nrow(GT))) {
   deg <- obj$deg
 
   contrast <- paste0(d$perturbagen, "-treated vs control ", d$cell_type)
-  sig <- deg$padj < PADJ & abs(deg$log2FoldChange) > LOGFC
+  sel <- select_degs(deg)
   ora <- tryCatch(
-    run_ora(deg$symbol[sig], deg$symbol, gene_sets),
+    run_ora(sel$genes, deg$symbol, gene_sets),
     error = function(e) { message("  ORA failed: ", e$message); NULL }
   )
   if (is.null(ora)) next

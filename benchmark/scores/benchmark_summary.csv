@@ -1,0 +1,4 @@
+"dataset","model","recovery_keyword","recovery_judge","hallucination_rate","n_hypotheses","prompt_tokens","completion_tokens","cost_usd"
+"dexamethasone_organoid","deepseek-chat",0.5,1,0,4,1035,1512,0.00194265
+"imatinib_k562","deepseek-chat",1,1,0,3,731,1394,0.00173077
+"rapamycin_nk","deepseek-chat",0.666666666666667,0.333333333333333,0,4,1297,1917,0.00245889

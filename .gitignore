@@ -7,3 +7,5 @@
 inst/doc
 *.html
 deginsight_cache/
+benchmark/geo_cache/
+benchmark/deg_tables/

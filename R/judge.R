@@ -80,12 +80,13 @@ judge_mechanism <- function(interpretation,
 #' @rdname judge_mechanism
 #' @export
 score_recovery_keywords <- function(interpretation, gt_components) {
-  text <- tolower(hypotheses_to_text(interpretation))
+  text <- normalize_omics_text(hypotheses_to_text(interpretation))
   per_component <- do.call(rbind, lapply(gt_components, function(comp) {
     # synonyms separated by "|" or "/" (e.g. "mTOR|mTORC1",
     # "translational/ribosomal suppression")
     kws <- trimws(strsplit(comp, "[|/]")[[1]])
-    hit <- any(vapply(tolower(kws), function(k) grepl(k, text, fixed = TRUE),
+    hit <- any(vapply(normalize_omics_text(kws),
+                      function(k) grepl(k, text, fixed = TRUE),
                       logical(1)))
     data.frame(component = comp, recovered = hit,
                justification = if (hit) "keyword match" else "no keyword match",
@@ -95,6 +96,16 @@ score_recovery_keywords <- function(interpretation, gt_components) {
        recovery_rate = mean(per_component$recovered),
        judge_model = "keyword",
        tokens = NULL)
+}
+
+#' Normalize biology text for robust matching: LLMs emit Greek letters
+#' (NF-kappa-B as "NF-\u03baB"), en-dashes and curly quotes.
+#' @noRd
+normalize_omics_text <- function(x) {
+  x <- tolower(x)
+  x <- chartr("\u03b1\u03b2\u03b3\u03b4\u03ba\u03bb\u03bc\u03c0\u03c4", "abdgklmpt", x)
+  x <- gsub("[\u2013\u2014\u2012]", "-", x)
+  gsub("[''\"]", "", x)
 }
 
 #' Flatten hypotheses into plain text for scoring

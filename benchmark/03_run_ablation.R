@@ -8,11 +8,17 @@
 #   tissue   : TRUE / FALSE        (cell-type context injected or withheld)
 # Results: benchmark/ablation/<dataset>__fs<0|1>__n<k>__ctx<0|1>.rds
 
-library(DEGinsight)
+lib <- "G:/WorkBuddy/2026-11-16-20-16-33/Rlib"
+if (dir.exists(lib)) .libPaths(c(lib, .libPaths()))
+if (requireNamespace("DEGinsight", quietly = TRUE)) {
+  library(DEGinsight)
+} else {
+  for (f in list.files("R", full.names = TRUE)) source(f)
+}
 
 MODEL   <- Sys.getenv("ABLATION_MODEL", "deepseek-chat")
 DATASETS <- strsplit(Sys.getenv("ABLATION_DATASETS",
-                                "rapamycin_nk,imatinib_k562,tnf_hela"), ",")[[1]]
+                                "rapamycin_nk,imatinib_k562,dexamethasone_organoid"), ",")[[1]]
 GRID <- expand.grid(few_shot = c(FALSE, TRUE),
                     top_n = c(5, 10, 20, 30),
                     tissue = c(TRUE, FALSE),
@@ -26,12 +32,20 @@ gene_sets <- if (file.exists(GENE_SETS_GMT)) read_gmt(GENE_SETS_GMT) else {
 }
 dir.create("benchmark/ablation", showWarnings = FALSE, recursive = TRUE)
 
+select_degs <- function(deg, padj = 0.05, logfc = 1, top_n = 150) {
+  sig <- deg$padj < padj & abs(deg$log2FoldChange) > logfc
+  if (sum(sig) >= 20) return(deg$symbol[sig])
+  deg <- deg[order(deg$padj), ]
+  up <- deg$symbol[deg$log2FoldChange > 0][seq_len(min(top_n / 2, sum(deg$log2FoldChange > 0)))]
+  dn <- deg$symbol[deg$log2FoldChange < 0][seq_len(min(top_n / 2, sum(deg$log2FoldChange < 0)))]
+  unique(c(up, dn))
+}
+
 for (ds in DATASETS) {
   d <- GT[GT$dataset_id == ds, ]
   obj <- readRDS(file.path("benchmark/deg_tables", paste0(ds, ".rds")))
   deg <- obj$deg
-  sig <- deg$padj < 0.05 & abs(deg$log2FoldChange) > 1
-  ora <- run_ora(deg$symbol[sig], deg$symbol, gene_sets)
+  ora <- run_ora(select_degs(deg), deg$symbol, gene_sets)
   contrast <- paste0(d$perturbagen, "-treated vs control ", d$cell_type)
   gt_comp <- strsplit(d$gt_components, "\\|")[[1]]
 

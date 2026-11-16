@@ -30,6 +30,7 @@ E-utilities on 2026-11-16 (`ground_truth.csv`):
 export LLM_API_KEY=sk-...
 export LLM_BASE_URL=https://api.deepseek.com/v1
 # optional: place an MSigDB Hallmark GMT at benchmark/gene_sets.gmt
+#   (e.g. from Enrichr: https://maayanlab.cloud/Enrichr/geneSetLibrary?mode=text&libraryName=MSigDB_Hallmark_2020)
 
 Rscript benchmark/01_download.R        # GEO -> DEG tables (limma)
 Rscript benchmark/02_run_benchmark.R   # datasets x models -> interpretations
@@ -38,6 +39,11 @@ Rscript benchmark/03_run_ablation.R    # few-shot x top_n x tissue grid
 Rscript benchmark/04_score.R           # aggregate ablation too
 # render benchmark/05_report.Rmd for figures
 ```
+
+Network note: if NCBI TLS fails ("SSL connect error"), download series
+matrices / supplementary files with `curl -k` into `benchmark/geo_cache/`
+manually, then use `01b_prepare_real.R` (dataset-specific supplementary-file
+handling — RNA-seq series matrices contain no expression table).
 
 All scripts are idempotent (skip existing results) and all LLM responses
 are disk-cached by DEGinsight, so re-runs cost nothing.
@@ -63,3 +69,38 @@ are disk-cached by DEGinsight, so re-runs cost nothing.
   (`JUDGE_MODEL` env var) to limit self-preference bias.
 - `02_run_benchmark.R` uses the bundled toy gene sets if no GMT is found —
   that mode is only for pipeline testing, not for real results.
+
+## Live run (2026-11-16)
+
+First end-to-end execution on 3 datasets (rapamycin_nk, dexamethasone_organoid,
+imatinib_k562) x deepseek-chat, Hallmark gene sets, DEG tables via
+`01b_prepare_real.R` (limma; Welch t-test fallback where limma was
+unavailable during the run — flagged in the log, rerun with limma for the
+paper). Results in `scores/`:
+
+| metric | value |
+|---|---|
+| mechanism recovery (keyword) | 0.722 |
+| mechanism recovery (LLM judge) | 0.778 |
+| hallucination rate | 0.00 |
+| mean cost per dataset | $0.002 |
+
+Ablation (48 configs, 3 datasets):
+
+| factor | finding |
+|---|---|
+| few-shot | hurts recovery on these data (0.80 without vs 0.64 with) — the worked example appears to bias framing; report as a negative result |
+| top_n pathways | recovery improves with more pathways (0.64 @10 -> 0.81 @30) |
+| tissue context | marginal (0.71 vs 0.73) |
+| hallucination | 0% in all 48 configs |
+
+Model quality note: the qualitative interpretations were textbook-correct
+(rapamycin -> lipid metabolic reprogramming via mTORC1; dexamethasone -> GR
+activation with NF-kB repression and FKBP5 induction; imatinib -> release of
+erythroid differentiation block in K562). The remaining keyword misses were
+vocabulary mismatches (e.g. "NF-kB" vs "NF-kappaB"), fixed by
+`normalize_omics_text()` — always report keyword + judge scores together.
+
+Pending: tnf_hela (GSE244770 stores only bigWigs — needs recount),
+lps_monocyte (suppl lacks the paired untreated-vs-LPS contrast tables),
+vorinostat_a498 / wortmannin_hepg2 (RAW.tar extraction pending).
