@@ -1,0 +1,59 @@
+---
+title: "DEGinsight benchmark: mechanism recovery, hallucination and cost"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+library(ggplot2)
+bench <- read.csv("scores/benchmark_summary.csv", stringsAsFactors = FALSE)
+abl <- if (file.exists("scores/ablation_summary.csv"))
+  read.csv("scores/ablation_summary.csv") else NULL
+```
+
+## Model ranking
+
+```{r}
+knitr::kable(read.csv("scores/model_ranking.csv"), digits = 3,
+             caption = "Per-model mean mechanism-recovery (keyword + judge), hallucination rate and cost per dataset")
+```
+
+## Recovery vs hallucination per dataset
+
+```{r fig.width=8, fig.height=4}
+ggplot(bench, aes(x = model, y = recovery_keyword, fill = model)) +
+  geom_col(position = "dodge") +
+  facet_wrap(~ dataset) + ylim(0, 1) +
+  labs(y = "mechanism recovery rate", title = "Ground-truth mechanism recovery") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "none")
+
+ggplot(bench, aes(x = model, y = hallucination_rate, fill = model)) +
+  geom_col() + facet_wrap(~ dataset) +
+  labs(y = "hallucination rate", title = "Hallucinated pathway citations") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "none")
+```
+
+## Cost-performance trade-off
+
+```{r}
+agg <- aggregate(cbind(recovery_keyword, cost_usd) ~ model, bench, mean, na.rm = TRUE)
+ggplot(agg, aes(cost_usd, recovery_keyword, label = model)) +
+  geom_point(size = 3) + geom_text(vjust = -1) +
+  labs(x = "mean cost per dataset (USD)", y = "mean recovery rate")
+```
+
+## Ablation
+
+```{r}
+if (!is.null(abl)) {
+  print(ggplot(abl, aes(factor(top_n), recovery_keyword, color = few_shot,
+                        group = few_shot)) +
+          stat_summary(fun = mean, geom = "line") +
+          stat_summary(fun = mean, geom = "point") +
+          facet_wrap(~ tissue, labeller = label_both) +
+          labs(x = "top_n pathways", y = "mean recovery rate",
+               title = "Ablation: few-shot x top_n x tissue context"))
+  knitr::kable(aggregate(cbind(recovery_keyword, hallucination_rate) ~
+                           few_shot + top_n + tissue, abl, mean), digits = 3)
+}
+```

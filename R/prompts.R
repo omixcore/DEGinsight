@@ -28,6 +28,9 @@
 #'   mixed DEGs? One of `"up"`, `"down"`, `"mixed"`.
 #' @param top_n Number of top pathways to include.
 #' @param max_genes Maximum overlapping genes listed per pathway.
+#' @param few_shot Logical; prepend one worked example (input -> expected
+#'   JSON output) to the prompt. One of the ablation factors in the
+#'   DEGinsight benchmark.
 #'
 #' @return A list with elements `system`, `prompt` and `schema`
 #'   (the JSON response schema).
@@ -46,7 +49,8 @@ build_interpretation_prompt <- function(enrichment,
                                         tissue = NULL,
                                         direction = c("mixed", "up", "down"),
                                         top_n = 20,
-                                        max_genes = 30) {
+                                        max_genes = 30,
+                                        few_shot = FALSE) {
   direction <- match.arg(direction)
   df <- utils::head(enrichment[order(enrichment$p_adjust), ], top_n)
 
@@ -77,6 +81,7 @@ build_interpretation_prompt <- function(enrichment,
     "- Direction of DEGs analysed: ", direction, "-regulated\n\n",
     "## Enriched pathways (top ", nrow(df), " by adjusted p-value)\n",
     paste(pathway_lines, collapse = "\n"), "\n\n",
+    if (few_shot) paste0(few_shot_example(), "\n\n") else "",
     "## Task\n",
     "1. Synthesize these pathways into 1-5 coherent mechanistic hypotheses ",
     "explaining the biological response in this contrast.\n",
@@ -101,4 +106,29 @@ build_interpretation_prompt <- function(enrichment,
   )
 
   list(system = system, prompt = prompt, schema = schema)
+}
+
+#' Worked example used for few-shot prompting
+#' @noRd
+few_shot_example <- function() {
+  paste0(
+    "## Example (illustrating the expected reasoning and format)\n",
+    "Input pathways:\n",
+    "1. mTOR signaling (adj.P = 1.2e-08, overlap = 18/120)\n   Genes: RPTOR, MTOR, RPS6KB1, EIF4EBP1, AKT1S1\n",
+    "2. Ribosome (adj.P = 3.4e-06, overlap = 15/90)\n   Genes: RPL5, RPL11, RPS6, RPS3\n",
+    "Expected output:\n",
+    '```json',
+    "\n{\n",
+    '  "hypotheses": [{\n',
+    '    "name": "mTORC1 inhibition blocks translational initiation",\n',
+    '    "mechanism": "Suppression of mTOR signaling together with the ribosome program indicates reduced cap-dependent translation downstream of mTORC1.",\n',
+    '    "supporting_pathways": ["mTOR signaling", "Ribosome"],\n',
+    '    "driver_genes": ["RPTOR", "RPS6KB1", "EIF4EBP1"],\n',
+    '    "evidence_grade": "strong",\n',
+    '    "follow_up_experiment": "Western blot of phospho-S6K (T389) and polysome profiling."\n',
+    "  }],\n",
+    '  "flagged_pathways": [],\n',
+    '  "overall_summary": "The response is dominated by mTORC1-driven translational shutdown."\n',
+    "}\n```"
+  )
 }

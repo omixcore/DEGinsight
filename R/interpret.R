@@ -7,6 +7,8 @@
 #'   \code{\link{build_interpretation_prompt}}).
 #' @param contrast,species,tissue,direction,top_n Passed to
 #'   \code{\link{build_interpretation_prompt}}.
+#' @param few_shot Logical; prepend a worked example to the prompt
+#'   (ablation factor, see \code{\link{build_interpretation_prompt}}).
 #' @param model,base_url,api_key Passed to \code{\link{call_llm}}.
 #' @param vocabulary Optional character vector of valid term names used to
 #'   detect hallucinated pathways (e.g. all GO BP term names). If NULL,
@@ -38,9 +40,11 @@ interpret_enrichment <- function(enrichment,
                                  base_url = Sys.getenv("LLM_BASE_URL", "https://api.deepseek.com/v1"),
                                  api_key = Sys.getenv("LLM_API_KEY"),
                                  vocabulary = NULL,
+                                 few_shot = FALSE,
                                  ...) {
   p <- build_interpretation_prompt(enrichment, contrast, species, tissue,
-                                   match.arg(direction), top_n)
+                                   match.arg(direction), top_n,
+                                   few_shot = few_shot)
   raw <- call_llm(p$prompt, system = p$system, model = model,
                   base_url = base_url, api_key = api_key,
                   response_schema = p$schema, ...)

@@ -7,6 +7,8 @@
 #' are downgraded to `speculative`.
 #'
 #' @inheritParams interpret_enrichment
+#' @param few_shot Logical; passed through to
+#'   \code{\link{interpret_enrichment}} (ablation factor).
 #' @param models Character vector (length >= 2) of model IDs.
 #' @param min_agreement Minimum fraction of models that must support a
 #'   pathway cluster for it to enter the consensus (default 0.5).
