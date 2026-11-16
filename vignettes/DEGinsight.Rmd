@@ -1,0 +1,111 @@
+---
+title: "DEGinsight: LLM-assisted mechanism interpretation of DEG results"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{DEGinsight: LLM-assisted mechanism interpretation of DEG results}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", eval = FALSE)
+```
+
+## Overview
+
+DEGinsight turns a differential-expression result into evidence-graded,
+ontology-grounded mechanistic hypotheses. The pipeline has four stages:
+
+1. **Enrichment** — `run_ora()` (built-in) or any `clusterProfiler` result.
+2. **Prompting** — `build_interpretation_prompt()` grounds the LLM with the
+   exact enriched terms, statistics and overlapping genes.
+3. **Interpretation** — `interpret_enrichment()` (single model) or
+   `interpret_ensemble()` (multi-model majority vote).
+4. **Auditing** — `validate_terms()` flags hallucinated pathway names and
+   computes the hallucination rate.
+
+## Setup
+
+```{r}
+library(DEGinsight)
+
+# Any OpenAI-compatible endpoint works. Examples: DeepSeek, OpenAI, Moonshot,
+# local Ollama (http://localhost:11434/v1).
+Sys.setenv(LLM_API_KEY = "sk-...")
+Sys.setenv(LLM_BASE_URL = "https://api.deepseek.com/v1")
+```
+
+**Privacy note**: prompts contain pathway names and gene symbols. For
+controlled data, use a local backend (e.g. Ollama) — only the endpoint URL
+changes.
+
+## Quick start with bundled example data
+
+```{r}
+data(example_data)   # example_deg, example_gene_sets, example_ora
+
+# (optional) estimate cost before spending anything
+estimate_cost(example_ora, contrast = "TNF-stimulated vs control HeLa cells",
+              species = "Homo sapiens",
+              models = c("deepseek-chat", "kimi-k2"))
+
+# single-model interpretation
+res <- interpret_enrichment(
+  example_ora,
+  contrast = "TNF-stimulated vs control HeLa cells",
+  species  = "Homo sapiens",
+  tissue   = "HeLa",
+  direction = "up",
+  model = "deepseek-chat"
+)
+res
+```
+
+## End-to-end from a DEG table
+
+```{r}
+out <- interpret_deg(
+  example_deg,
+  gene_col = "symbol", padj_col = "padj", logfc_col = "log2FoldChange",
+  gene_sets = example_gene_sets,
+  contrast = "TNF-stimulated vs control", species = "Homo sapiens",
+  models = c("deepseek-chat", "kimi-k2")   # ensemble mode
+)
+out$interpretation$consensus
+```
+
+With real data, load gene sets from a GMT file (e.g. MSigDB Hallmark):
+
+```{r}
+gs <- read_gmt("h.all.v2024.1.Hs.symbols.gmt")
+out <- interpret_deg(my_deg, gene_col = "symbol", gene_sets = gs,
+                     contrast = "...", species = "Homo sapiens")
+```
+
+## Using clusterProfiler results
+
+```{r}
+library(clusterProfiler)
+ego <- enrichGO(gene = deg_symbols, OrgDb = org.Hs.eg.db::org.Hs.eg.db,
+                keyType = "SYMBOL", ont = "BP", readable = TRUE)
+df <- as.data.frame(ego)
+df <- data.frame(pathway = df$Description, p_adjust = df$p.adjust,
+                 overlap = df$Count, size = NA, genes = gsub("/", ",", df$geneID))
+res <- interpret_enrichment(df, contrast = "...", species = "Homo sapiens",
+                            vocabulary = go_vocabulary("BP"))
+```
+
+## HTML report
+
+```{r}
+render_report(out$ora, out$interpretation,
+              output_file = "TNF_interpretation.html")
+```
+
+## Reproducibility
+
+- All LLM calls default to `temperature = 0`.
+- Responses are cached on disk (see `DEGinsight_cache()`): re-running a
+  vignette or benchmark is deterministic and free. Cache keys hash the full
+  request, including the model name.
+- Record model IDs and dates in publications; frontier models drift.

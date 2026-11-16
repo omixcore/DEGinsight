@@ -1,0 +1,39 @@
+Package: DEGinsight
+Title: LLM-Assisted Pathway and Mechanism Interpretation of Bulk RNA-seq
+    Differential Expression Results
+Version: 0.1.0
+Authors@R:
+    person(given = "omixcore",
+           family = "",
+           role = c("aut", "cre"),
+           email = "1264284076@qq.com")
+Description: Interprets differential gene expression (DEG) results from bulk
+    RNA-seq experiments by combining classical enrichment analysis (ORA/GSEA)
+    with large language model (LLM) reasoning. DEGinsight builds structured,
+    ontology-constrained prompts from enrichment results, queries one or more
+    LLMs through a unified OpenAI-compatible backend, validates model outputs
+    against controlled vocabularies (GO, KEGG, Reactome) to quantify and
+    suppress hallucinations, and integrates multi-model votes into
+    evidence-graded mechanistic hypotheses. A reproducible HTML report and
+    cost-estimation utilities are included.
+License: MIT + file LICENSE
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.2
+Imports:
+    httr2 (>= 1.0.0),
+    jsonlite,
+    digest,
+    stats,
+    utils
+Suggests:
+    clusterProfiler,
+    org.Hs.eg.db,
+    GO.db,
+    rmarkdown,
+    knitr,
+    testthat (>= 3.0.0)
+VignetteBuilder: knitr
+Config/testthat/edition: 3
+URL: https://github.com/omixcore/DEGinsight
+BugReports: https://github.com/omixcore/DEGinsight/issues
