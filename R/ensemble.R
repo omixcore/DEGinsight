@@ -86,7 +86,8 @@ mechanism_consensus <- function(per_model, min_agreement) {
   })
   evidence <- do.call(c, evidence)
   evidence <- Filter(function(x) length(x$pathways) > 0L && nzchar(trimws(x$claim)), evidence)
-  keys <- vapply(evidence, function(x) normalize_omics_text(x$claim), character(1))
+  keys <- vapply(evidence, function(x) tolower(gsub("[[:space:]]+", " ", trimws(x$claim))),
+                 character(1))
   groups <- split(evidence, keys)
   threshold <- function(n) {
     if (is.null(min_agreement)) n > length(models) / 2 else n / length(models) >= min_agreement

@@ -37,3 +37,16 @@ test_that("consensus requires independent backing for the same grounded claim", 
   expect_equal(out$consensus$mechanisms[[1]]$pathways, "A")
   expect_equal(out$consensus$supporting_models$A, c("m1", "m2"))
 })
+
+test_that("opposing mechanism notation never forms a shared claim", {
+  local_mocked_bindings(call_llm = function(..., model) {
+    mechanism <- if (model == "m1") "A -> B" else "A -| B"
+    list(hypotheses = list(list(name = "Regulation", mechanism = mechanism,
+                               supporting_pathways = "Pathway",
+                               driver_genes = "g1", evidence_grade = "speculative")))
+  })
+  x <- data.frame(pathway = "Pathway", p_adjust = 0.01, genes = "g1")
+  out <- interpret_ensemble(x, "t vs c", "human", models = c("m1", "m2"))
+  expect_equal(out$consensus$pathways, "Pathway")
+  expect_length(out$consensus$mechanisms, 0L)
+})
