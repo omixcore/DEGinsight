@@ -17,7 +17,7 @@ interp <- params$interpretation
 ## Top enriched pathways
 
 ```{r}
-knitr::kable(head(ora, 20), caption = "Top 20 enriched pathways by adjusted p-value")
+knitr::kable(utils::head(ora, 20), caption = "Top 20 enriched pathways by adjusted p-value")
 ```
 
 ## Mechanistic hypotheses
@@ -35,20 +35,32 @@ if (inherits(interp, "deginsight_interpretation")) {
 } else if (inherits(interp, "deginsight_ensemble")) {
   cat("### Consensus pathways (multi-model)\n\n")
   sp <- interp$consensus$support
-  knitr::kable(data.frame(pathway = names(sp), model_support = sp))
+  print(knitr::kable(data.frame(pathway = names(sp), model_support = sp)))
+  for (mechanism in interp$consensus$mechanisms) {
+    cat("\n\n**Shared mechanism claim**  ", mechanism$mechanism, "\n\n",
+        paste(mechanism$pathways, collapse = ", "), "\n\n", sep = "")
+  }
 }
 ```
 
-## Hallucination audit
+## Evidence audit
 
 ```{r results='asis'}
 if (inherits(interp, "deginsight_interpretation")) {
-  cat(sprintf("Hallucination rate: **%.1f%%** (%d of %d cited terms)\n\n",
+  cat(sprintf("Unrecognized pathway rate: **%.1f%%** (%d of %d cited terms)\n\n",
               100 * interp$validation$hallucination_rate,
               length(interp$validation$hallucinated),
               length(interp$validation$cited)))
   if (length(interp$validation$hallucinated)) {
-    cat("Flagged terms: ", paste(interp$validation$hallucinated, collapse = ", "))
+    cat("Unrecognized terms: ", paste(interp$validation$hallucinated, collapse = ", "), "\n\n")
+  }
+  if (length(interp$validation$unsupported_pathways)) {
+    cat("Pathways absent from the prompt: ",
+        paste(interp$validation$unsupported_pathways, collapse = ", "), "\n\n")
+  }
+  if (length(interp$validation$unsupported_driver_genes)) {
+    cat("Driver genes absent from the prompt: ",
+        paste(interp$validation$unsupported_driver_genes, collapse = ", "), "\n\n")
   }
 }
 ```

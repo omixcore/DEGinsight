@@ -5,3 +5,6 @@
 ^\.Rproj\.user$
 ^LICENSE\.md$
 ^\.git$
+
+^paper$
+^man-roxygen$

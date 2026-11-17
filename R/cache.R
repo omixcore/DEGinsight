@@ -4,17 +4,21 @@
 #' \code{\link{call_llm}}. Location priority:
 #' \enumerate{
 #'   \item \code{dir} argument
+#'   \item session option \code{DEGinsight.cache_dir}
 #'   \item environment variable \code{DEGINSIGHT_CACHE_DIR}
 #'   \item \code{tools::R_user_dir("DEGinsight", "cache")}
 #' }
 #'
-#' @param dir Optional explicit directory.
+#' @param dir Optional directory to use for the current R session.
 #' @return The cache directory path (invisibly).
 #' @export
 DEGinsight_cache <- function(dir = NULL) {
-  d <- dir %||% Sys.getenv("DEGINSIGHT_CACHE_DIR",
-                           tools::R_user_dir("DEGinsight", "cache"))
+  d <- dir %||% getOption("DEGinsight.cache_dir") %||%
+    Sys.getenv("DEGINSIGHT_CACHE_DIR", tools::R_user_dir("DEGinsight", "cache"))
   if (!dir.exists(d)) dir.create(d, recursive = TRUE, showWarnings = FALSE)
+  if (!dir.exists(d)) stop("Cannot create the DEGinsight cache directory.")
+  d <- normalizePath(d)
+  if (!is.null(dir)) options(DEGinsight.cache_dir = d)
   invisible(d)
 }
 
@@ -32,11 +36,19 @@ cache_path <- function(key) {
 #' @noRd
 cache_get <- function(key) {
   p <- cache_path(key)
-  if (file.exists(p)) readRDS(p) else NULL
+  if (file.exists(p)) tryCatch(readRDS(p), error = function(e) NULL) else NULL
 }
 
 #' @noRd
 cache_set <- function(key, value) {
-  saveRDS(value, cache_path(key))
+  path <- cache_path(key)
+  tmp <- tempfile(tmpdir = dirname(path))
+  on.exit(unlink(tmp), add = TRUE)
+  saveRDS(value, tmp)
+  if (!file.exists(path) || is.null(cache_get(key))) {
+    if (!suppressWarnings(file.rename(tmp, path)) && !file.exists(path)) {
+      warning("Could not save the DEGinsight cache entry.")
+    }
+  }
   invisible(value)
 }

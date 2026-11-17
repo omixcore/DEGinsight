@@ -1,13 +1,9 @@
-# DEGinsight 0.1.0
+# DEGinsight 0.0.1
 
-* Initial release.
-* Core pipeline: `run_ora()` -> `build_interpretation_prompt()` ->
-  `interpret_enrichment()` / `interpret_ensemble()` -> `validate_terms()`.
-* Unified OpenAI-compatible LLM backend with structured JSON output,
-  retry, and on-disk response caching.
-* Hallucination auditing against controlled vocabularies
-  (`validate_terms()`, `go_vocabulary()`).
-* Multi-model majority-vote ensembles with agreement matrices.
-* `estimate_cost()` budgeting utility.
-* Reproducible HTML reports (`render_report()`).
-* Bundled simulated TNF-stimulation example dataset.
+- ORA uses unique tested genes and adjusts over every size-eligible pathway.
+  Added directional DEG analysis and optional fgsea-based preranked GSEA.
+- Interpretation validates the response structure and audits the exact prompt
+  evidence. Ensemble agreement defaults to a strict majority.
+- Cache keys include the endpoint, and cache writes are staged before renaming.
+- The revised benchmark pins the GEO inputs, fits sample-level designs,
+  reproduces directional ORA baselines and fingerprints model-run inputs.

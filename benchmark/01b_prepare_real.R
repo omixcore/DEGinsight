@@ -1,192 +1,132 @@
-# 01b_prepare_real.R — dataset-specific DEG preparation for the live run
-#
-# Why this exists: GEO series matrices for RNA-seq contain no expression
-# table (verified 2026-11-16), so each series needs its own supplementary
-# file handling. Run after data-raw/install_deps.R and the curl downloads
-# in benchmark/README.md.
-#
-# Inputs (benchmark/geo_cache/):
-#   GSE318529_Raw_Counts.csv.gz                  (rapamycin, raw counts)
-#   GSE304202_normalized_counts.csv.gz           (dexamethasone, normalized)
-#   GSE304202_gene_annotation.csv.gz             (ENSEMBL -> Symbol)
-#   GSE321679_Normalised_counts_all_samples.xlsx (imatinib; via python csv)
-# Outputs: benchmark/deg_tables/<dataset_id>.rds (DEG tables via limma)
+# Run from the repository root after 00_fetch_geo.sh and 01_convert_inputs.py.
+stopifnot(requireNamespace("limma", quietly = TRUE),
+          requireNamespace("edgeR", quietly = TRUE))
+cache <- "benchmark/geo_cache"
+output <- "benchmark/deg_tables"
+dir.create(output, showWarnings = FALSE, recursive = TRUE)
 
-lib <- "G:/WorkBuddy/2026-11-16-20-16-33/Rlib"
-if (dir.exists(lib)) .libPaths(c(lib, .libPaths()))
-if (requireNamespace("limma", quietly = TRUE)) library(limma)
+read_input <- function(name, ...) {
+  read.csv(file.path(cache, name), check.names = FALSE, ...)
+}
 
-CACHE <- "benchmark/geo_cache"
-dir.create("benchmark/deg_tables", showWarnings = FALSE, recursive = TRUE)
-
-ann <- read.csv(file.path(CACHE, "GSE304202_gene_annotation.csv.gz"))
-ens2sym <- setNames(ann$Symbol, ann$ENSEMBL)
-
-limma_deg <- function(mat, groups) {
-  # mat: gene x sample numeric matrix (counts or normalized values)
-  voom_input <- log2(mat + 1)
-  treat <- voom_input[, groups == "treat", drop = FALSE]
-  ctrl  <- voom_input[, groups == "ctrl",  drop = FALSE]
-  if (requireNamespace("limma", quietly = TRUE)) {
-    design <- model.matrix(~ 0 + groups)
-    colnames(design) <- levels(groups)
-    fit <- eBayes(contrasts.fit(lmFit(voom_input, design),
-                                makeContrasts(treat - ctrl, levels = design)))
-    tt <- topTable(fit, number = Inf, sort.by = "none")
-    data.frame(symbol = rownames(tt), log2FoldChange = tt$logFC,
-               padj = p.adjust(tt$P.Value, "BH"), stringsAsFactors = FALSE)
+fit_deg <- function(mat, samples, symbols, type, paired = FALSE) {
+  if (!identical(colnames(mat), samples$sample) || anyDuplicated(samples$sample) ||
+      is.null(rownames(mat)) || anyDuplicated(rownames(mat)) || !is.numeric(mat) ||
+      any(!is.finite(mat)) || (type != "logcpm" && any(mat < 0))) {
+    stop("Invalid expression matrix or sample alignment.")
+  }
+  samples$condition <- factor(samples$condition, levels = c("control", "treated"))
+  if (anyNA(samples$condition) || min(table(samples$condition)) < 2L) {
+    stop("Expected at least two samples per condition.")
+  }
+  if ("block" %in% names(samples)) {
+    samples$block <- factor(samples$block)
+    if (paired && !all(table(samples$block, samples$condition) == 1L)) {
+      stop("Expected exactly one sample per block and condition.")
+    }
+    design <- model.matrix(~ block + condition, samples)
   } else {
-    message("limma unavailable — falling back to Welch t-test + BH ",
-            "(document this in the paper; use limma for final runs).")
-    # drop near-constant genes (t.test would return NaN)
-    vars <- apply(voom_input, 1, var)
-    keep <- is.finite(vars) & vars > 1e-8
-    voom_input <- voom_input[keep, ]
-    treat <- treat[keep, ]; ctrl <- ctrl[keep, ]
-    p <- apply(voom_input, 1, function(g) {
-      tryCatch(t.test(g[groups == "treat"], g[groups == "ctrl"])$p.value,
-               error = function(e) NA_real_)
-    })
-    p[is.na(p)] <- 1
-    data.frame(symbol = rownames(voom_input),
-               log2FoldChange = rowMeans(treat) - rowMeans(ctrl),
-               padj = p.adjust(p, "BH"), stringsAsFactors = FALSE)
+    design <- model.matrix(~ condition, samples)
   }
+  if (qr(design)$rank != ncol(design) || nrow(design) <= ncol(design)) {
+    stop("The design has confounding or insufficient residual degrees of freedom.")
+  }
+  if (type %in% c("counts", "scaled_tpm_counts")) {
+    dge <- edgeR::DGEList(mat)
+    keep <- edgeR::filterByExpr(dge, group = samples$condition)
+    normalize <- if (utils::packageVersion("edgeR") >= "4.4.0" &&
+                     "normLibSizes" %in% getNamespaceExports("edgeR")) edgeR::normLibSizes else edgeR::calcNormFactors
+    dge <- normalize(dge[keep, , keep.lib.sizes = FALSE], method = "TMM")
+    expression <- limma::voom(dge, design, plot = FALSE)
+    method <- "filterByExpr + TMM + limma-voom"
+  } else if (type == "normalized_counts") {
+    keep <- rowSums(mat >= 1) >= min(table(samples$condition))
+    expression <- log2(mat[keep, , drop = FALSE] + 1)
+    method <- "log2(normalized counts + 1) + limma-trend"
+  } else {
+    expression <- mat
+    method <- "submitted logCPM + limma-trend (original voom weights unavailable)"
+  }
+  fit <- limma::eBayes(limma::lmFit(expression, design),
+                       trend = !type %in% c("counts", "scaled_tpm_counts"))
+  tt <- limma::topTable(fit, coef = "conditiontreated", number = Inf, sort.by = "none")
+  deg <- data.frame(gene_id = rownames(tt), symbol = unname(symbols[rownames(tt)]),
+                    log2FoldChange = tt$logFC, p_value = tt$P.Value,
+                    padj = tt$adj.P.Val, statistic = tt$t, mean_expression = tt$AveExpr)
+  list(deg = deg, samples = samples, input_type = type, method = method,
+       design = design, tested_genes = nrow(deg), residual_df = nrow(design) - ncol(design),
+       pipeline = "limma-v2")
 }
 
-collapse_symbols <- function(counts, ids) {
-  sym <- ens2sym[sub("\\..*$", "", ids)]
-  keep <- !is.na(sym) & nzchar(sym)
-  counts <- counts[keep, ]; sym <- sym[keep]
-  counts <- rowsum(counts, sym)  # sum duplicate symbols
-  counts
+save_dataset <- function(id, expression, sample_data, symbols, type, paired = FALSE) {
+  obj <- fit_deg(expression, sample_data, symbols, type, paired)
+  obj$preparation_sha256 <- digest::digest(file = "benchmark/01b_prepare_real.R", algo = "sha256")
+  obj$sources_sha256 <- digest::digest(file = "benchmark/sources.tsv", algo = "sha256")
+  saveRDS(obj, file.path(output, paste0(id, ".rds")))
+  write.csv(obj$samples, file.path(output, paste0(id, "_samples.csv")), row.names = FALSE)
+  message(id, ": ", obj$tested_genes, " tested genes, residual df = ", obj$residual_df)
 }
 
-# ---- rapamycin: GSE318529, Stage 4, 15-C, mTORi vs DMSO -------------------
-raw <- read.csv(file.path(CACHE, "GSE318529_Raw_Counts.csv.gz"),
-                row.names = 1, check.names = FALSE)
-treat <- grep("^S4_15C_mTORi", colnames(raw), value = TRUE)
-ctrl  <- grep("^S4_15C_DMSO",  colnames(raw), value = TRUE)
-cat("rapamycin treat:", length(treat), "ctrl:", length(ctrl), "\n")
-mat <- collapse_symbols(as.matrix(raw[, c(treat, ctrl)]), rownames(raw))
-mat <- mat[rowSums(mat >= 10) >= 3, ]  # filter low counts
-groups <- factor(c(rep("treat", length(treat)), rep("ctrl", length(ctrl))),
-                 levels = c("ctrl", "treat"))
-deg <- limma_deg(mat, groups)
-saveRDS(list(deg = deg, treat_samples = treat, ctrl_samples = ctrl),
-        "benchmark/deg_tables/rapamycin_nk.rds")
-cat("rapamycin DEGs (padj<0.05, |logFC|>1):",
-    sum(deg$padj < 0.05 & abs(deg$log2FoldChange) > 1, na.rm = TRUE), "\n")
+select_samples <- function(samples, treated, control, n_per_arm) {
+  treat <- grepl(treated, samples)
+  ctrl <- grepl(control, samples)
+  stopifnot(!any(treat & ctrl), sum(treat) == n_per_arm, sum(ctrl) == n_per_arm)
+  keep <- treat | ctrl
+  data.frame(sample = samples[keep], condition = ifelse(treat[keep], "treated", "control"))
+}
 
-# ---- dexamethasone: GSE304202, Dexa vs Control ----------------------------
-nc <- read.csv(file.path(CACHE, "GSE304202_normalized_counts.csv.gz"),
-               row.names = 1, check.names = FALSE)
-treat <- grep("Dexa", colnames(nc), value = TRUE)
-ctrl  <- grep("Control", colnames(nc), value = TRUE)
-cat("dexamethasone treat:", length(treat), "ctrl:", length(ctrl), "\n")
-mat <- collapse_symbols(as.matrix(nc[, c(treat, ctrl)]), rownames(nc))
-mat <- mat[rowMeans(mat) > 1, ]
-groups <- factor(c(rep("treat", length(treat)), rep("ctrl", length(ctrl))),
-                 levels = c("ctrl", "treat"))
-deg <- limma_deg(mat, groups)
-saveRDS(list(deg = deg, treat_samples = treat, ctrl_samples = ctrl),
-        "benchmark/deg_tables/dexamethasone_organoid.rds")
-cat("dexamethasone DEGs:", sum(deg$padj < 0.05 & abs(deg$log2FoldChange) > 1, na.rm = TRUE), "\n")
+converted <- function(name) {
+  tab <- read_input(name)
+  mat <- as.matrix(tab[setdiff(names(tab), c("gene_id", "symbol"))])
+  rownames(mat) <- tab$gene_id
+  list(mat = mat, symbols = setNames(tab$symbol, tab$gene_id))
+}
 
-# ---- imatinib: GSE321679, K562 WT imatinib vs DMSO ------------------------
-# xlsx converted to csv beforehand (python openpyxl, see README)
-im_csv <- file.path(CACHE, "GSE321679_counts.csv")
-if (file.exists(im_csv)) {
-  # sheet 'K562-WT- DMSO VS Imatinib': ENSEMBL, SYMBOL, 3 imatinib, 3 DMSO
-  im <- read.csv(im_csv, check.names = FALSE)
-  counts <- as.matrix(im[, grep("WT-", colnames(im))])
-  rownames(counts) <- make.unique(im$SYMBOL)
-  counts <- counts[!is.na(im$SYMBOL) & nzchar(im$SYMBOL), ]
-  treat <- grep("imatinib", colnames(counts), ignore.case = TRUE, value = TRUE)
-  ctrl  <- grep("DMSO", colnames(counts), ignore.case = TRUE, value = TRUE)
-  cat("imatinib treat:", length(treat), "ctrl:", length(ctrl), "\n")
-  mat <- counts[, c(treat, ctrl)]
-  storage.mode(mat) <- "numeric"
-  mat <- mat[rowMeans(mat) > 1, ]
-  groups <- factor(c(rep("treat", length(treat)), rep("ctrl", length(ctrl))),
-                   levels = c("ctrl", "treat"))
-  deg <- limma_deg(mat, groups)
-  saveRDS(list(deg = deg, treat_samples = treat, ctrl_samples = ctrl),
-          "benchmark/deg_tables/imatinib_k562.rds")
-  cat("imatinib DEGs:", sum(deg$padj < 0.05 & abs(deg$log2FoldChange) > 1, na.rm = TRUE), "\n")
-} else cat("imatinib csv not ready, skipping\n")
+raw <- as.matrix(read_input("GSE318529_Raw_Counts.csv.gz", row.names = 1))
+ann <- read_input("ensembl97_symbols.csv")
+samples <- select_samples(colnames(raw), "^S4_15C_mTORi_", "^S4_15C_DMSO_", 3)
+samples$block <- sub("^.*_", "", samples$sample)
+save_dataset("rapamycin_nk", raw[, samples$sample], samples,
+             setNames(ann$symbol, ann$gene_id), "counts", paired = TRUE)
 
-# ---- vorinostat: GSE319257, mock arm only, SAHA vs mock ------------------
-# Combined by 01c_vorinostat_xlsx.py from the per-sample GEO xlsx files.
-vo_csv <- file.path(CACHE, "GSE319257_counts.csv")
-if (file.exists(vo_csv)) {
-  vo <- read.csv(vo_csv, check.names = FALSE, stringsAsFactors = FALSE)
-  counts <- as.matrix(vo[, setdiff(colnames(vo), "gene")])
-  rownames(counts) <- make.unique(vo$gene)
-  storage.mode(counts) <- "numeric"
-  treat <- grep("mock_vorinostat", colnames(counts), value = TRUE)
-  ctrl  <- grep("mock_control",    colnames(counts), value = TRUE)
-  cat("vorinostat treat:", length(treat), "ctrl:", length(ctrl), "\n")
-  mat <- counts[, c(treat, ctrl), drop = FALSE]
-  keep <- rowSums(mat >= 10) >= 3
-  mat <- rowsum(mat[keep, , drop = FALSE], rownames(mat)[keep])  # dedupe symbols
-  groups <- factor(c(rep("treat", length(treat)), rep("ctrl", length(ctrl))),
-                   levels = c("ctrl", "treat"))
-  deg <- limma_deg(mat, groups)
-  saveRDS(list(deg = deg, treat_samples = treat, ctrl_samples = ctrl),
-          "benchmark/deg_tables/vorinostat_a498.rds")
-  cat("vorinostat DEGs:", sum(deg$padj < 0.05 & abs(deg$log2FoldChange) > 1, na.rm = TRUE), "\n")
-} else cat("vorinostat csv not ready, skipping\n")
+norm <- as.matrix(read_input("GSE304202_normalized_counts.csv.gz", row.names = 1))
+ann <- read_input("GSE304202_gene_annotation.csv.gz")
+meta <- read_input("GSE304202_sample_metadata.csv.gz", row.names = 1)
+samples <- select_samples(colnames(norm), "_Dexa_", "_Control_", 6)
+stopifnot(!anyDuplicated(meta$Sample), setequal(meta$Sample, samples$sample))
+index <- match(samples$sample, meta$Sample)
+stopifnot(all(meta$Condition[index] == ifelse(samples$condition == "treated", "Dexa", "Control")))
+samples$submitted_id <- rownames(meta)[index]
+samples$sex <- meta$Sex[index]
+# The study used each patient's sample as its own control (doi:10.1016/j.redox.2026.104057).
+# The deposited sample IDs share a suffix between matched vehicle and treated samples.
+stopifnot(all(grepl("^[CD][0-9]+$", samples$submitted_id)),
+          all(substr(samples$submitted_id, 1, 1) == ifelse(samples$condition == "treated", "D", "C")))
+samples$block <- sub("^[CD]", "", samples$submitted_id)
+stopifnot(all(vapply(split(samples$sex, samples$block), function(x) length(unique(x)) == 1L, logical(1))))
+save_dataset("dexamethasone_organoid", norm[, samples$sample], samples,
+             setNames(ann$Symbol, ann$ENSEMBL), "normalized_counts", paired = TRUE)
 
-# ---- LPS: GSE297509, siRNA-ctrl arm, LPS vs mock, 2 donors ----------------
-# Per-sample files carry: Gene ID, Name (symbol), ..., unique reads (count).
-lps_dir <- file.path(CACHE, "lps")
-lps_map <- c(
-  donor1_mock = "GSM8993640_A_C_minus.txt.gz",
-  donor1_LPS  = "GSM8993641_A_C_LPS.txt.gz",
-  donor2_mock = "GSM8993646_B_C_minus.txt.gz",
-  donor2_LPS  = "GSM8993647_B_C_LPS.txt.gz")
-if (all(file.exists(file.path(lps_dir, lps_map)))) {
-  read_lps <- function(f) {
-    x <- read.delim(gzfile(file.path(lps_dir, f)), check.names = FALSE,
-                    stringsAsFactors = FALSE)
-    setNames(x[["unique reads"]], x[["Name"]])
-  }
-  lst <- lapply(lps_map, read_lps)
-  mat <- do.call(cbind, lst)
-  rownames(mat) <- sub("\\..*$", "", rownames(mat))
-  mat <- rowsum(mat, rownames(mat))
-  treat <- grep("_LPS$", colnames(mat), value = TRUE)
-  ctrl  <- grep("_mock$", colnames(mat), value = TRUE)
-  cat("LPS treat:", length(treat), "ctrl:", length(ctrl), "\n")
-  mat <- mat[rowSums(mat >= 10) >= 2, , drop = FALSE]
-  groups <- factor(c(rep("treat", length(treat)), rep("ctrl", length(ctrl))),
-                   levels = c("ctrl", "treat"))
-  deg <- limma_deg(mat[, c(treat, ctrl), drop = FALSE], groups)
-  saveRDS(list(deg = deg, treat_samples = treat, ctrl_samples = ctrl),
-          "benchmark/deg_tables/lps_macrophage.rds")
-  cat("LPS DEGs:", sum(deg$padj < 0.05 & abs(deg$log2FoldChange) > 1, na.rm = TRUE), "\n")
-} else cat("LPS per-sample files not ready, skipping\n")
+im <- converted("GSE321679_logcpm.csv")
+samples <- select_samples(colnames(im$mat), "^WT-imatinib-", "^WT-DMSO-", 3)
+samples$block <- sub("^.*-", "", samples$sample)
+save_dataset("imatinib_k562", im$mat[, samples$sample], samples,
+             im$symbols, "logcpm", paired = TRUE)
 
-# ---- TNF-alpha: GSE305796, iPSC astrocytes, TNF vs untreated, 3 donors ----
-# Salmon transcript counts mapped to symbols by 01d_tnf_quant.py (mygene.info).
-tnf_csv <- file.path(CACHE, "GSE305796_counts.csv")
-if (file.exists(tnf_csv)) {
-  tf <- read.csv(tnf_csv, check.names = FALSE, stringsAsFactors = FALSE)
-  counts <- as.matrix(tf[, setdiff(colnames(tf), "gene")])
-  rownames(counts) <- tf$gene
-  storage.mode(counts) <- "numeric"
-  treat <- grep("^T", colnames(counts), value = TRUE)
-  ctrl  <- grep("^C", colnames(counts), value = TRUE)
-  cat("TNF treat:", length(treat), "ctrl:", length(ctrl), "\n")
-  mat <- counts[, c(treat, ctrl), drop = FALSE]
-  mat <- mat[rowSums(mat >= 10) >= 3, , drop = FALSE]
-  groups <- factor(c(rep("treat", length(treat)), rep("ctrl", length(ctrl))),
-                   levels = c("ctrl", "treat"))
-  deg <- limma_deg(mat, groups)
-  saveRDS(list(deg = deg, treat_samples = treat, ctrl_samples = ctrl),
-          "benchmark/deg_tables/tnf_astrocyte.rds")
-  cat("TNF DEGs:", sum(deg$padj < 0.05 & abs(deg$log2FoldChange) > 1, na.rm = TRUE), "\n")
-} else cat("TNF counts not ready, skipping\n")
+vo <- converted("GSE319257_counts.csv")
+samples <- select_samples(colnames(vo$mat), "_mock_vorinostat_", "_mock_control_", 6)
+save_dataset("vorinostat_a498", vo$mat[, samples$sample], samples, vo$symbols, "counts")
 
-cat("01b done\n")
+lps <- converted("GSE297509_counts.csv")
+samples <- select_samples(colnames(lps$mat), "_treat$", "_ctrl$", 2)
+samples$block <- sub("^GSM[0-9]+_(donor[12])_.*$", "\\1", samples$sample)
+save_dataset("lps_macrophage", lps$mat[, samples$sample], samples,
+             lps$symbols, "counts", paired = TRUE)
+
+tnf <- converted("GSE305796_scaled_tpm_counts.csv")
+samples <- select_samples(colnames(tnf$mat), "_T[0-9]+$", "_C[0-9]+$", 3)
+samples$block <- sub("^.*_[TC]", "", samples$sample)
+save_dataset("tnf_astrocyte", tnf$mat[, samples$sample], samples, tnf$symbols,
+             "scaled_tpm_counts", paired = TRUE)
+
+writeLines(capture.output(sessionInfo()), file.path(output, "sessionInfo.txt"))

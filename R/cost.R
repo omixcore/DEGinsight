@@ -15,7 +15,7 @@
 #' @return A data.frame with per-model estimated cost in USD.
 #'
 #' @examples
-#' data(example_ora, package = "DEGinsight")
+#' data(example_data, package = "DEGinsight")
 #' estimate_cost(example_ora, contrast = "TNF vs control",
 #'               species = "Homo sapiens",
 #'               models = c("deepseek-chat", "gpt-4o-mini"))

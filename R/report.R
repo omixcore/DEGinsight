@@ -18,6 +18,8 @@ render_report <- function(ora, interpretation,
     stop("Install rmarkdown first: install.packages('rmarkdown')", call. = FALSE)
   }
   template <- system.file("templates", "report.Rmd", package = "DEGinsight")
+  if (!dir.exists(dirname(output_file))) stop("Report output directory does not exist.")
+  output_file <- file.path(normalizePath(dirname(output_file)), basename(output_file))
   rmarkdown::render(template,
                     params = list(ora = ora, interpretation = interpretation,
                                   title = title),

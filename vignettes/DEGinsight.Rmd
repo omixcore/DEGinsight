@@ -16,13 +16,12 @@ knitr::opts_chunk$set(collapse = TRUE, comment = "#>", eval = FALSE)
 DEGinsight turns a differential-expression result into evidence-graded,
 ontology-grounded mechanistic hypotheses. The pipeline has four stages:
 
-1. **Enrichment** — `run_ora()` (built-in) or any `clusterProfiler` result.
+1. **Enrichment** — `run_ora()`, `run_gsea()`, or an enrichment table mapped to the package format.
 2. **Prompting** — `build_interpretation_prompt()` grounds the LLM with the
    exact enriched terms, statistics and overlapping genes.
 3. **Interpretation** — `interpret_enrichment()` (single model) or
    `interpret_ensemble()` (multi-model majority vote).
-4. **Auditing** — `validate_terms()` flags hallucinated pathway names and
-   computes the hallucination rate.
+4. **Auditing** — cited pathways and driver genes are checked against what appeared in the prompt.
 
 ## Setup
 
@@ -106,6 +105,6 @@ render_report(out$ora, out$interpretation,
 
 - All LLM calls default to `temperature = 0`.
 - Responses are cached on disk (see `DEGinsight_cache()`): re-running a
-  vignette or benchmark is deterministic and free. Cache keys hash the full
-  request, including the model name.
+  request can reuse a successful cached response. Cache keys include the API
+  endpoint, model and request body.
 - Record model IDs and dates in publications; frontier models drift.
