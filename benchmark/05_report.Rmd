@@ -12,6 +12,12 @@ output:
     df_print: paged
 ---
 
+```{css, echo=FALSE}
+table.table { font-size: 12px; }
+table.table td, table.table th { vertical-align: top; padding: 5px 9px; }
+table.table { table-layout: auto; }
+```
+
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE,
                       fig.width = 8.5, fig.height = 4.2, dpi = 110)
@@ -47,16 +53,13 @@ grid$status <- ifelse(
   paste(grid$dataset, grid$model) %in%
     paste(bench$dataset, bench$model), "complete", "pending")
 grid$status <- factor(grid$status, levels = c("complete", "pending"))
-knitr::kable(
-  xtabs(~ dataset + model, grid) ,
-  caption = "Planned benchmark grid (count of datasets per cell).")
 tab <- reshape(grid, idvar = "dataset", timevar = "model", direction = "wide")
 names(tab) <- sub("status\\.", "", names(tab))
 knitr::kable(tab, caption = sprintf(
   "Cell-level status: %d of %d runs complete.", N_DONE, N_CELLS))
 ```
 
-```{r}
+```{r, results='asis'}
 if (N_DONE < N_CELLS) {
   cat(sprintf("\n> **Partial grid.** %d of %d runs have been executed. All\n",
               N_DONE, N_CELLS),
@@ -81,8 +84,10 @@ against that fixed text.
 knitr::kable(
   data.frame(dataset = gt$dataset_id, GEO = gt$gse,
              perturbation = gt$perturbagen, system = gt$cell_type,
-             `pre-registered mechanism` = gsub("\\|", "; ", gt$gt_components),
+             `pre-registered mechanism` = gsub("/", " / ",
+                                        gsub("\\|", "<br>", gt$gt_components)),
              check.names = FALSE),
+  format = "html", escape = FALSE,
   caption = "Benchmark datasets. `gt_components` is fixed in ground_truth.csv and is never edited after seeing model output.")
 ```
 

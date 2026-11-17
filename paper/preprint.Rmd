@@ -207,10 +207,18 @@ knitr::kable(
   data.frame(Dataset = gt$dataset_id,
              GEO = gt$gse,
              Perturbation = gt$perturbagen,
-             System = gt$cell_type,
-             `Pre-registered mechanism` = gsub("\\|", "; ", gt$gt_components),
-             check.names = FALSE),
-  caption = "Benchmark datasets and their frozen mechanism ground truth. The gt_components column was committed to version control before the first model call and was not edited afterwards.")
+             System = gt$cell_type),
+  caption = "Benchmark datasets. The series accessions are public; DE tables and cached model responses are in the repository.")
+```
+
+```{r, results='asis'}
+cat("**Pre-registered mechanism components** (frozen before the first model call):\n\n")
+for (i in seq_len(nrow(gt))) {
+  comp <- gsub("\\|", "; ", gt$gt_components[i])
+  cat("- **", gt$dataset_id[i], "** — ", comp, "\n", sep = "")
+}
+cat("\nThe `gt_components` column was committed to version control before any\n")
+cat("model was called and was not edited afterwards.\n")
 ```
 
 The six cover distinct target classes: an kinase inhibitor of a fusion

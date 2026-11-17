@@ -47,13 +47,16 @@ h3 { font-size: 15px; }
 p { margin: 0 0 0.85em; text-align: justify; }
 
 .affil {
-  font-size: 13px;
+  font-size: 12.5px;
   color: #555;
   border-top: 1px solid #ddd;
   border-bottom: 1px solid #ddd;
   padding: 10px 0;
   margin-bottom: 24px;
 }
+
+.affil p { text-align: left; margin: 0; }
+.affil code { background: none; padding: 0; }
 
 table {
   width: 100%;
