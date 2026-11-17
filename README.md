@@ -58,6 +58,20 @@ The optional live benchmark uses a fixed scoring protocol and requires model
 credentials. See the [benchmark instructions](benchmark/README.md) and
 [report source](benchmark/05_report.Rmd).
 
+## Shiny interface
+
+Install the optional Shiny dependency with `install.packages("shiny")`, then
+open the local app with `DEGinsight::run_shiny()`.
+
+Choose the bundled example or upload a CSV/TSV enrichment, differential
+expression or signed-ranking table. ORA and GSEA uploads also take a GMT
+file. Preranked GSEA requires the optional Bioconductor package `fgsea`.
+Use **Prepare evidence** to compute or load enrichment and inspect the prompt.
+This step runs locally. **Run LLM** sends the prepared prompt to the
+OpenAI-compatible endpoint configured by `LLM_BASE_URL` and `LLM_API_KEY`.
+The app presents structured hypotheses and citation checks, with downloads
+for enrichment CSV and interpretation JSON.
+
 ## License
 
 MIT

@@ -27,6 +27,7 @@ Suggests:
     fgsea,
     GO.db,
     rmarkdown,
+    shiny,
     knitr,
     testthat (>= 3.2.0),
     withr

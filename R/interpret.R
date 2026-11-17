@@ -118,6 +118,27 @@ interpret_deg <- function(deg,
                           ...,
                           direction = c("mixed", "up", "down", "split")) {
   direction <- match.arg(direction)
+
+  analyse <- function(mode) {
+    selected <- select_ora_genes(deg, gene_col, padj_col, logfc_col,
+                                 padj_cutoff, logfc_cutoff, universe, mode)
+    ora <- run_ora(selected$genes, selected$universe, gene_sets)
+    interp <- if (length(models) == 1L) {
+      interpret_enrichment(ora, contrast = contrast, species = species,
+                           model = models, direction = mode, ...)
+    } else {
+      interpret_ensemble(ora, contrast = contrast, species = species,
+                         models = models, direction = mode, ...)
+    }
+    list(ora = ora, interpretation = interp)
+  }
+  if (direction == "split") return(list(up = analyse("up"), down = analyse("down")))
+  analyse(direction)
+}
+
+#' @noRd
+select_ora_genes <- function(deg, gene_col, padj_col, logfc_col, padj_cutoff,
+                             logfc_cutoff, universe, direction) {
   if (!is.data.frame(deg) || !all(c(gene_col, padj_col, logfc_col) %in% names(deg))) {
     stop("DEG table is missing a requested column.")
   }
@@ -134,23 +155,9 @@ interpret_deg <- function(deg,
   if (!is.null(padj_col)) sig <- sig & deg[[padj_col]] < padj_cutoff
   if (!is.null(logfc_col)) sig <- sig & abs(deg[[logfc_col]]) > logfc_cutoff
   universe <- universe %||% gene_ids[tested]
-
-  analyse <- function(mode) {
-    selected <- sig
-    if (mode == "up") selected <- selected & deg[[logfc_col]] > 0
-    if (mode == "down") selected <- selected & deg[[logfc_col]] < 0
-    ora <- run_ora(intersect(gene_ids[selected], universe), universe, gene_sets)
-    interp <- if (length(models) == 1L) {
-      interpret_enrichment(ora, contrast = contrast, species = species,
-                           model = models, direction = mode, ...)
-    } else {
-      interpret_ensemble(ora, contrast = contrast, species = species,
-                         models = models, direction = mode, ...)
-    }
-    list(ora = ora, interpretation = interp)
-  }
-  if (direction == "split") return(list(up = analyse("up"), down = analyse("down")))
-  analyse(direction)
+  if (direction == "up") sig <- sig & deg[[logfc_col]] > 0
+  if (direction == "down") sig <- sig & deg[[logfc_col]] < 0
+  list(genes = intersect(gene_ids[sig], universe), universe = universe)
 }
 
 #' @export
