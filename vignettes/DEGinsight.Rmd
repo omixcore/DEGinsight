@@ -31,7 +31,7 @@ library(DEGinsight)
 # Any OpenAI-compatible endpoint works. Examples: DeepSeek, OpenAI, Moonshot,
 # local Ollama (http://localhost:11434/v1).
 Sys.setenv(LLM_API_KEY = "sk-...")
-Sys.setenv(LLM_BASE_URL = "https://api.deepseek.com/v1")
+Sys.setenv(LLM_BASE_URL = "https://api.deepseek.com")
 ```
 
 **Privacy note**: prompts contain pathway names and gene symbols. For
@@ -46,7 +46,7 @@ data(example_data)   # example_deg, example_gene_sets, example_ora
 # (optional) estimate cost before spending anything
 estimate_cost(example_ora, contrast = "TNF-stimulated vs control HeLa cells",
               species = "Homo sapiens",
-              models = c("deepseek-chat", "kimi-k2"))
+              models = c("deepseek-flash", "deepseek-v4-pro"))
 
 # single-model interpretation
 res <- interpret_enrichment(
@@ -55,7 +55,7 @@ res <- interpret_enrichment(
   species  = "Homo sapiens",
   tissue   = "HeLa",
   direction = "up",
-  model = "deepseek-chat"
+  model = "deepseek-flash"
 )
 res
 ```
@@ -68,7 +68,7 @@ out <- interpret_deg(
   gene_col = "symbol", padj_col = "padj", logfc_col = "log2FoldChange",
   gene_sets = example_gene_sets,
   contrast = "TNF-stimulated vs control", species = "Homo sapiens",
-  models = c("deepseek-chat", "kimi-k2")   # ensemble mode
+  models = c("deepseek-flash", "deepseek-v4-pro")   # ensemble mode
 )
 out$interpretation$consensus
 ```

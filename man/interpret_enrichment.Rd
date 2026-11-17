@@ -11,8 +11,8 @@ interpret_enrichment(
   tissue = NULL,
   direction = c("mixed", "up", "down"),
   top_n = 20,
-  model = "deepseek-chat",
-  base_url = Sys.getenv("LLM_BASE_URL", "https://api.deepseek.com/v1"),
+  model = "deepseek-flash",
+  base_url = Sys.getenv("LLM_BASE_URL", "https://api.deepseek.com"),
   api_key = Sys.getenv("LLM_API_KEY"),
   vocabulary = NULL,
   few_shot = FALSE,
@@ -52,7 +52,7 @@ ontology validation -> hallucination scoring.
 res <- interpret_enrichment(example_ora,
                             contrast = "TNF vs control",
                             species = "Homo sapiens",
-                            model = "deepseek-chat")
+                            model = "deepseek-flash")
 res$hypotheses
 }
 

@@ -35,8 +35,8 @@
 judge_mechanism <- function(interpretation,
                             gt_components,
                             gt_context,
-                            model = "deepseek-chat",
-                            base_url = Sys.getenv("LLM_BASE_URL", "https://api.deepseek.com/v1"),
+                            model = "deepseek-flash",
+                            base_url = Sys.getenv("LLM_BASE_URL", "https://api.deepseek.com"),
                             api_key = Sys.getenv("LLM_API_KEY"),
                             ...) {
   hyp_text <- hypotheses_to_text(interpretation)

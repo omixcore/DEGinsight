@@ -7,8 +7,8 @@
 call_llm(
   prompt,
   system = NULL,
-  model = "deepseek-chat",
-  base_url = Sys.getenv("LLM_BASE_URL", "https://api.deepseek.com/v1"),
+  model = "deepseek-flash",
+  base_url = Sys.getenv("LLM_BASE_URL", "https://api.deepseek.com"),
   api_key = Sys.getenv("LLM_API_KEY"),
   response_schema = NULL,
   temperature = 0,
@@ -21,7 +21,7 @@ call_llm(
 
 \item{system}{Character scalar or NULL. Optional system prompt.}
 
-\item{model}{Model identifier, e.g. \code{"deepseek-chat"}, \code{"gpt-4o-mini"},
+\item{model}{Model identifier, e.g. \code{"deepseek-flash"}, \code{"gpt-4o-mini"},
 \code{"qwen2.5:14b"} (Ollama).}
 
 \item{base_url}{API endpoint. Defaults to the environment variable
@@ -62,7 +62,7 @@ so repeated runs are free and byte-identical.
 }
 \examples{
 \dontrun{
-Sys.setenv(LLM_API_KEY = "sk-...", LLM_BASE_URL = "https://api.deepseek.com/v1")
+Sys.setenv(LLM_API_KEY = "sk-...", LLM_BASE_URL = "https://api.deepseek.com")
 call_llm("Reply with {\"ok\": true}",
          response_schema = list(ok = "logical"))
 }

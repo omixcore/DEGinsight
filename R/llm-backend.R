@@ -15,7 +15,7 @@
 #'
 #' @param prompt Character scalar. The user prompt.
 #' @param system Character scalar or NULL. Optional system prompt.
-#' @param model Model identifier, e.g. `"deepseek-chat"`, `"gpt-4o-mini"`,
+#' @param model Model identifier, e.g. `"deepseek-flash"`, `"gpt-4o-mini"`,
 #'   `"qwen2.5:14b"` (Ollama).
 #' @param base_url API endpoint. Defaults to the environment variable
 #'   `LLM_BASE_URL`, falling back to DeepSeek's public endpoint.
@@ -34,7 +34,7 @@
 #'
 #' @examples
 #' \dontrun{
-#' Sys.setenv(LLM_API_KEY = "sk-...", LLM_BASE_URL = "https://api.deepseek.com/v1")
+#' Sys.setenv(LLM_API_KEY = "sk-...", LLM_BASE_URL = "https://api.deepseek.com")
 #' call_llm("Reply with {\"ok\": true}",
 #'          response_schema = list(ok = "logical"))
 #' }
@@ -44,8 +44,8 @@
 #' @export
 call_llm <- function(prompt,
                      system = NULL,
-                     model = "deepseek-chat",
-                     base_url = Sys.getenv("LLM_BASE_URL", "https://api.deepseek.com/v1"),
+                     model = "deepseek-flash",
+                     base_url = Sys.getenv("LLM_BASE_URL", "https://api.deepseek.com"),
                      api_key = Sys.getenv("LLM_API_KEY"),
                      response_schema = NULL,
                      temperature = 0,

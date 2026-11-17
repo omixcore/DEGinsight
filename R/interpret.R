@@ -25,7 +25,7 @@
 #' res <- interpret_enrichment(example_ora,
 #'                             contrast = "TNF vs control",
 #'                             species = "Homo sapiens",
-#'                             model = "deepseek-chat")
+#'                             model = "deepseek-flash")
 #' res$hypotheses
 #' }
 #'
@@ -36,8 +36,8 @@ interpret_enrichment <- function(enrichment,
                                  tissue = NULL,
                                  direction = c("mixed", "up", "down"),
                                  top_n = 20,
-                                 model = "deepseek-chat",
-                                 base_url = Sys.getenv("LLM_BASE_URL", "https://api.deepseek.com/v1"),
+                                 model = "deepseek-flash",
+                                 base_url = Sys.getenv("LLM_BASE_URL", "https://api.deepseek.com"),
                                  api_key = Sys.getenv("LLM_API_KEY"),
                                  vocabulary = NULL,
                                  few_shot = FALSE,
@@ -100,7 +100,7 @@ interpret_enrichment <- function(enrichment,
 #' out <- interpret_deg(my_deg, gene_col = "symbol", padj_col = "padj",
 #'                      logfc_col = "log2FoldChange", gene_sets = gs,
 #'                      contrast = "treated vs control", species = "Homo sapiens",
-#'                      models = c("deepseek-chat", "kimi-k2"))
+#'                      models = c("deepseek-flash", "deepseek-v4-pro"))
 #' }
 #'
 #' @export
@@ -112,7 +112,7 @@ interpret_deg <- function(deg,
                           logfc_cutoff = 1,
                           universe = NULL,
                           gene_sets,
-                          models = "deepseek-chat",
+                          models = "deepseek-flash",
                           contrast,
                           species,
                           ...,

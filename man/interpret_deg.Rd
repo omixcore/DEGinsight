@@ -13,7 +13,7 @@ interpret_deg(
   logfc_cutoff = 1,
   universe = NULL,
   gene_sets,
-  models = "deepseek-chat",
+  models = "deepseek-flash",
   contrast,
   species,
   ...,
@@ -57,7 +57,7 @@ gs <- read_gmt("hallmark.gmt")
 out <- interpret_deg(my_deg, gene_col = "symbol", padj_col = "padj",
                      logfc_col = "log2FoldChange", gene_sets = gs,
                      contrast = "treated vs control", species = "Homo sapiens",
-                     models = c("deepseek-chat", "kimi-k2"))
+                     models = c("deepseek-flash", "deepseek-v4-pro"))
 }
 
 }

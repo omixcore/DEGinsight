@@ -23,7 +23,7 @@ interpret_ensemble <- function(enrichment,
                                tissue = NULL,
                                direction = c("mixed", "up", "down"),
                                top_n = 20,
-                               models = c("deepseek-chat", "kimi-k2", "gpt-4o-mini"),
+                               models = c("deepseek-flash", "deepseek-v4-pro"),
                                vocabulary = NULL,
                                min_agreement = NULL,
                                ..., few_shot = FALSE) {

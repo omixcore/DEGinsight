@@ -18,14 +18,14 @@
 #' data(example_data, package = "DEGinsight")
 #' estimate_cost(example_ora, contrast = "TNF vs control",
 #'               species = "Homo sapiens",
-#'               models = c("deepseek-chat", "gpt-4o-mini"))
+#'               models = c("deepseek-flash", "gpt-4o-mini"))
 #'
 #' @export
 estimate_cost <- function(enrichment,
                           contrast,
                           species,
                           ...,
-                          models = c("deepseek-chat", "gpt-4o-mini"),
+                          models = c("deepseek-flash", "gpt-4o-mini"),
                           prices = default_prices(),
                           expected_output_tokens = 1500) {
   p <- build_interpretation_prompt(enrichment, contrast, species, ...)
