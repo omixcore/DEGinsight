@@ -16,6 +16,7 @@ export(read_gmt)
 export(render_report)
 export(run_gsea)
 export(run_ora)
+export(run_shiny)
 export(score_recovery_keywords)
 export(validate_terms)
 importFrom(httr2,

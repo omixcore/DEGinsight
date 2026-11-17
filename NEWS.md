@@ -1,4 +1,5 @@
 # DEGinsight 0.0.1
+- Add a local Shiny interface for enrichment, prompt review and model output.
 
 - ORA uses unique tested genes and adjusts over every size-eligible pathway.
   Added directional DEG analysis and optional fgsea-based preranked GSEA.
