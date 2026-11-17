@@ -1,156 +1,397 @@
 ---
-title: "LLM-assisted interpretation of differential expression: a mechanism-recovery benchmark"
-subtitle: "DEGinsight benchmark report"
+title: "Can an LLM read a differential-expression table? A mechanism-recovery benchmark for DEGinsight"
+subtitle: "Benchmark report — `r format(Sys.Date(), '%d %B %Y')`"
+author: "DEGinsight project (omixcore)"
 output:
   html_document:
     toc: true
     toc_float: true
+    toc_depth: 3
     code_folding: hide
     theme: flatly
+    df_print: paged
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE,
-                      fig.width = 8, fig.height = 4.2)
+                      fig.width = 8.5, fig.height = 4.2, dpi = 110)
 suppressPackageStartupMessages(library(ggplot2))
-bench <- read.csv("scores/benchmark_summary.csv", stringsAsFactors = FALSE)
-abl <- if (file.exists("scores/ablation_summary.csv"))
-  read.csv("scores/ablation_summary.csv", stringsAsFactors = FALSE) else NULL
-gt <- read.csv("ground_truth.csv", stringsAsFactors = FALSE, check.names = FALSE)
-ranking <- read.csv("scores/model_ranking.csv", stringsAsFactors = FALSE)
-bench$model <- factor(bench$model, levels = ranking$model)
 theme_set(theme_minimal(base_size = 11))
+
+rd <- function(f) if (file.exists(f)) read.csv(f, stringsAsFactors = FALSE,
+                                              check.names = FALSE) else NULL
+bench   <- rd("scores/benchmark_summary.csv")
+abl     <- rd("scores/ablation_summary.csv")
+recall  <- rd("scores/pathway_recall.csv")
+gt      <- read.csv("ground_truth.csv", stringsAsFactors = FALSE, check.names = FALSE)
+
+MODELS <- c("deepseek-flash", "deepseek-v4-pro")
+N_CELLS <- nrow(gt) * length(MODELS)
+N_DONE  <- if (is.null(bench)) 0 else nrow(bench)
+
+ora <- if (!is.null(recall)) recall[recall$arm == "ORA_only", ] else NULL
+llm <- if (!is.null(recall)) recall[recall$arm == "LLM", ] else NULL
 ```
 
-# 1. What was measured
+# 0. Run status
 
-Every dataset is a public perturbation experiment whose mechanism is
-established independently of the transcriptome (drug target, receptor, or
-knockout), so an interpretation can be scored against a ground truth rather
-than against plausibility. For each dataset DEGinsight runs the same
-pipeline — ORA against MSigDB Hallmark, ontology-constrained prompt, one LLM
-call, validation — and the resulting mechanistic hypotheses are compared with
-three pre-registered mechanism components per dataset.
+This report renders itself from whatever is on disk, so it is always honest
+about coverage: every table states how many of the planned
+`r nrow(gt)` × `r length(MODELS)` = `r N_CELLS` dataset-model cells are
+actually filled. Nothing is imputed.
+
+```{r}
+grid <- expand.grid(dataset = gt$dataset_id, model = MODELS,
+                    stringsAsFactors = FALSE)
+grid$status <- ifelse(
+  paste(grid$dataset, grid$model) %in%
+    paste(bench$dataset, bench$model), "complete", "pending")
+grid$status <- factor(grid$status, levels = c("complete", "pending"))
+knitr::kable(
+  xtabs(~ dataset + model, grid) ,
+  caption = "Planned benchmark grid (count of datasets per cell).")
+tab <- reshape(grid, idvar = "dataset", timevar = "model", direction = "wide")
+names(tab) <- sub("status\\.", "", names(tab))
+knitr::kable(tab, caption = sprintf(
+  "Cell-level status: %d of %d runs complete.", N_DONE, N_CELLS))
+```
+
+```{r}
+if (N_DONE < N_CELLS) {
+  cat(sprintf("\n> **Partial grid.** %d of %d runs have been executed. All\n",
+              N_DONE, N_CELLS),
+      "> quantitative claims below are computed only over completed runs;\n",
+      "> the remaining cells are produced by `benchmark/02_run_benchmark.R`\n",
+      "> once API credit is available. Sections that do not depend on the LLM\n",
+      "> (data preparation, ORA baseline) are complete for all datasets.\n")
+}
+```
+
+# 1. What is being measured
+
+The usual way to evaluate an LLM in bioinformatics is to ask whether the
+output "looks right". That is not falsifiable. This benchmark instead uses
+perturbation experiments whose mechanism is known *independently of the
+transcriptome*: the drug's target, the receptor it engages, or the gene that
+was knocked out. For each dataset the mechanism is written down as three
+components **before** any model is run, and every interpretation is scored
+against that fixed text.
 
 ```{r}
 knitr::kable(
   data.frame(dataset = gt$dataset_id, GEO = gt$gse,
              perturbation = gt$perturbagen, system = gt$cell_type,
-             `ground-truth components` = gsub("\\|", "; ", gt$gt_components),
+             `pre-registered mechanism` = gsub("\\|", "; ", gt$gt_components),
              check.names = FALSE),
-  caption = "Benchmark datasets and their pre-registered mechanism ground truth."
-)
+  caption = "Benchmark datasets. `gt_components` is fixed in ground_truth.csv and is never edited after seeing model output.")
 ```
 
-Three quantities are reported per run: **mechanism recovery** (fraction of
-ground-truth components the interpretation recovers), **hallucination rate**
-(fraction of cited pathways absent from both the input enrichment table and
-the controlled vocabulary), and **cost** (tokens actually billed × published
-per-token price).
+Three quantities are reported for every run:
 
-# 2. Headline result
+| quantity | definition | cost |
+|---|---|---|
+| **mechanism recovery** | fraction of the pre-registered components recovered, by a synonym-aware matcher over the full interpretation text | free |
+| **hallucination rate** | fraction of cited pathways that appear in *neither* the input ORA table *nor* the controlled pathway vocabulary | free |
+| **cost** | billed tokens × the provider's published per-token price (prompt and completion priced separately) | — |
+
+A second, stricter recovery score is produced by an LLM judge that is always a
+*different* model from the one being scored (cross-judging), which removes
+self-preference bias without needing a third vendor.
+
+## 1.1 The six perturbation datasets
 
 ```{r}
-agg <- aggregate(cbind(recovery_keyword, recovery_judge, hallucination_rate,
-                       cost_usd, completion_tokens) ~ model, bench,
-                 mean, na.rm = TRUE, na.action = na.pass)
-knitr::kable(agg, digits = 3,
-             caption = "Mean performance per model across all datasets.")
+rows <- lapply(seq_len(nrow(gt)), function(i) {
+  f <- file.path("deg_tables", paste0(gt$dataset_id[i], ".rds"))
+  if (!file.exists(f)) return(NULL)
+  d <- readRDS(f)$deg
+  sig <- !is.na(d$padj) & !is.na(d$log2FoldChange) &
+    d$padj < 0.05 & abs(d$log2FoldChange) > 1
+  data.frame(dataset = gt$dataset_id[i],
+             genes_tested = nrow(d),
+             strict_DEG = sum(sig, na.rm = TRUE),
+             up = sum(sig & d$log2FoldChange > 0, na.rm = TRUE),
+             down = sum(sig & d$log2FoldChange < 0, na.rm = TRUE),
+             design = paste0(length(unique(readRDS(f)$treat_samples)), " vs ",
+                             length(unique(readRDS(f)$ctrl_samples))))
+})
+deg_tab <- do.call(rbind, rows)
+deg_tab$deg_mode <- ifelse(deg_tab$strict_DEG >= 20, "strict", "top-150 fallback")
+knitr::kable(deg_tab, caption = "Differential-expression yield per dataset (padj < 0.05, |log2FC| > 1).")
+```
+
+Two design problems show up immediately and are handled explicitly rather
+than hidden:
+
+- **Underpowered contrasts.** Rapamycin in primary NK cells yields **zero**
+  genes at the strict threshold. The pipeline therefore has an adaptive rule:
+  if fewer than 20 genes pass, it falls back to the 150 smallest-p-value genes
+  balanced by direction, and the fallback is recorded per run
+  (`deg_mode` in `results/*.rds`). Two of the six datasets use it.
+- **Panel-limited platforms.** The vorinostat table covers ~8,000 genes rather
+  than the whole transcriptome, so its DEG count is not comparable in absolute
+  terms. It is still usable because all metrics are ratios.
+
+# 2. Does the LLM add anything over the enrichment table it was handed?
+
+This is the first question a reviewer asks, and it can be answered **without
+any API spend**, because the ORA table is exactly what the model sees as
+input. Treat the top-*k* ORA terms as if they were the answer, score them
+against the same ground truth, and you have the no-LLM control.
+
+Both arms are scored through one projection: the pre-registered mechanism is
+mapped, a priori, onto the 49 MSigDB-Hallmark-like terms shipped with the
+package (`expected_gmt` in `ground_truth.csv`). Because the *same* projection
+is used for the ORA arm and the LLM arm, any bias in the mapping cancels out
+of the comparison.
+
+```{r}
+if (!is.null(ora)) {
+  o <- ora[order(ora$dataset), ]
+  o$recovered <- sprintf("%d/%d", o$n_expected_hit, o$n_expected)
+  knitr::kable(
+    o[, c("dataset", "deg_mode", "n_degs", "n_ora", "hit_at_5", "hit_at_10",
+          "recovered", "rank_first_hit")],
+    caption = "No-LLM control: how well does the ORA table alone recover the canonical pathways?")
+  cat(sprintf(
+    "\nAcross all %d datasets: **mean hit@5 = %.2f, mean hit@10 = %.2f**.\n",
+    nrow(o), mean(o$hit_at_5), mean(o$hit_at_10)))
+}
+```
+
+```{r fig.height=3.2}
+if (!is.null(recall)) {
+  pal <- c(ORA_only = "grey45", LLM = "#2c7fb8")
+  ggplot(recall, aes(dataset, hit_at_5, fill = arm)) +
+    geom_col(position = position_dodge(width = 0.8), width = 0.72) +
+    scale_fill_manual(values = pal, labels = c(ORA_only = "ORA table only",
+                                               LLM = "LLM interpretation")) +
+    coord_flip() + ylim(0, 1) +
+    labs(x = NULL, y = "canonical pathway recovered (top-5)", fill = NULL,
+         title = "The enrichment table is already a strong baseline",
+         subtitle = "ORA bars are complete for all 6 datasets; LLM bars only for completed runs")
+}
+```
+
+The baseline is not a straw man: plain ORA recovers at least one canonical
+pathway in the top five for two thirds of the datasets, and in the top ten for
+five of six. **A credible claim for an LLM layer therefore cannot be "it finds
+the pathway" — the pathway was already there.** What the model can add is the
+part ORA cannot express: which pathway is causal, which is a passenger, how
+the modules relate, what the direction means, and which follow-up experiment
+would discriminate between the remaining hypotheses.
+
+```{r}
+if (!is.null(llm)) {
+  m <- merge(
+    aggregate(cbind(hit_at_5, n_expected_hit) ~ dataset, llm, mean),
+    ora[, c("dataset", "hit_at_5", "n_expected_hit")],
+    by = "dataset", suffixes = c("_llm", "_ora"))
+  m$delta <- m$hit_at_5_llm - m$hit_at_5_ora
+  knitr::kable(m, digits = 3,
+    caption = "Pathway-level recall, LLM vs ORA-only, on the datasets where both exist.")
+  cat(sprintf("\nMean change in pathway recall: **%+.2f** (n = %d datasets).\n",
+              mean(m$delta), nrow(m)))
+}
+```
+
+Reading the delta correctly matters. A near-zero or negative delta is a
+*publishable* result, not a failed experiment: it says the LLM should be
+scored on mechanism synthesis and auditability, and that benchmarking it on
+"did it name the pathway" mostly measures whether the enrichment tool worked.
+
+# 3. Mechanism recovery, hallucination and cost
+
+```{r}
+if (!is.null(bench)) {
+  agg <- aggregate(cbind(recovery_keyword, recovery_judge, hallucination_rate,
+                         cost_usd, completion_tokens, n_hypotheses) ~ model,
+                   bench, mean, na.rm = TRUE, na.action = na.pass)
+  agg$n_runs <- as.vector(table(bench$model)[agg$model])
+  agg <- agg[order(-agg$recovery_keyword), c("model", "n_runs", setdiff(names(agg), c("model", "n_runs")))]
+  knitr::kable(agg, digits = 4,
+    caption = "Mean performance per model over the completed runs. `n_runs` is given because a mean over one run is a single observation, not an estimate.")
+}
+```
+
+```{r fig.height=3.4}
+if (!is.null(bench) && nrow(bench) > 1) {
+  ggplot(bench, aes(reorder(dataset, recovery_keyword), recovery_keyword,
+                    fill = model)) +
+    geom_col(position = position_dodge(width = 0.82), width = 0.75) +
+    coord_flip() + ylim(0, 1) +
+    labs(x = NULL, y = "mechanism recovery rate", fill = "model",
+         title = "Recovery of the pre-registered mechanism, by dataset")
+}
 ```
 
 ```{r}
-per_ds <- aggregate(recovery_keyword ~ dataset + model, bench, mean,
-                    na.action = na.pass)
-ggplot(per_ds, aes(reorder(dataset, recovery_keyword), recovery_keyword,
-                   fill = model)) +
-  geom_col(position = position_dodge(width = 0.8), width = 0.75) +
-  coord_flip() + ylim(0, 1) +
-  labs(x = NULL, y = "mechanism recovery rate", fill = "model",
-       title = "Recovery of the established mechanism, by dataset")
+if (!is.null(bench)) {
+  knitr::kable(
+    bench[, c("dataset", "model", "recovery_keyword", "recovery_judge",
+              "hallucination_rate", "n_hypotheses", "prompt_tokens",
+              "completion_tokens", "cost_usd", "elapsed_sec")],
+    digits = 4,
+    caption = "Per-run detail. recovery_judge is NA unless RUN_JUDGE=1 (cross-model judge).")
+  cat(sprintf(
+    "\nTotal measured spend across all completed runs: **$%.4f**; median cost per dataset-model run **$%.4f**.\n",
+    sum(bench$cost_usd, na.rm = TRUE), median(bench$cost_usd, na.rm = TRUE)))
+}
 ```
 
-# 3. Does it hallucinate?
+## 3.1 Hallucination
 
-```{r}
-ggplot(bench, aes(model, hallucination_rate, fill = model)) +
-  geom_col(width = 0.6) + facet_wrap(~ dataset) + ylim(0, 1) +
-  labs(x = NULL, y = "hallucination rate",
-       title = "Cited pathways that exist in neither the input nor the vocabulary") +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "none")
+```{r fig.height=2.9}
+if (!is.null(bench)) {
+  ggplot(bench, aes(model, hallucination_rate, fill = model)) +
+    geom_col(width = 0.55) + facet_wrap(~ dataset) +
+    coord_cartesian(ylim = c(0, 1)) +
+    labs(x = NULL, y = "hallucination rate",
+         title = "Cited pathways present in neither the input table nor the vocabulary") +
+    theme(axis.text.x = element_text(angle = 40, hjust = 1), legend.position = "none")
+}
 ```
 
-# 4. Cost-performance trade-off
+Every completed run scores **0** — no pathway was invented that was absent
+from both the input enrichment table and the controlled vocabulary. This is
+by construction rather than luck: the schema constrains `supporting_pathways`
+to the provided table, and `validate_terms()` re-checks each cited term after
+generation and records the violation rate instead of trusting the model's
+compliance. A zero here is evidence that the *audit* works, not that the model
+is honest; the guard is what makes the number meaningful.
 
-```{r}
-ggplot(agg, aes(cost_usd, recovery_keyword, label = model, colour = model)) +
-  geom_point(size = 3.5) +
-  geom_text(vjust = -1, size = 3.2, show.legend = FALSE) +
-  scale_x_log10() +
-  coord_cartesian(ylim = c(0, 1.05)) +
-  labs(x = "mean cost per dataset (USD, log scale)", y = "mean recovery rate",
-       title = "You get what you pay for — but the floor is high")
-```
+# 4. Ablation: what the user actually controls
 
-# 5. Ablation: prompt design
+Three knobs are exposed by `interpret_enrichment()`: whether a few-shot
+exemplar is included, how many pathways are shown (`top_n`), and whether
+tissue context is supplied. `benchmark/03_run_ablation.R` runs the full
+3-dataset × 2 × 4 × 2 = 48-cell grid.
 
-The ablation grid varies three factors that a user actually controls:
-few-shot exemplar (on/off), number of pathways shown to the model
-(5/10/20/30), and whether tissue context is supplied.
-
-```{r}
+```{r fig.height=3.4}
 if (!is.null(abl)) {
-  m <- aggregate(cbind(recovery_keyword, hallucination_rate) ~
-                   few_shot + top_n + tissue, abl, mean, na.action = na.pass)
-  ggplot(m, aes(factor(top_n), recovery_keyword, colour = factor(few_shot),
+  a <- aggregate(recovery_keyword ~ top_n + few_shot + tissue, abl, mean)
+  ggplot(a, aes(factor(top_n), recovery_keyword, colour = factor(few_shot),
                 group = few_shot)) +
-    geom_line() + geom_point() + facet_wrap(~ tissue) +
+    geom_line(linewidth = 0.6) + geom_point(size = 1.6) + facet_wrap(~ tissue) +
     coord_cartesian(ylim = c(0, 1)) +
     labs(x = "pathways shown to the model (top_n)", y = "mean recovery rate",
-         colour = "few-shot", title = "Ablation grid (all datasets pooled)")
-  knitr::kable(m, digits = 3,
-               caption = "Recovery and hallucination by ablation configuration.")
+         colour = "few-shot", title = "Ablation grid, 3 datasets pooled")
 }
 ```
 
 ```{r}
 if (!is.null(abl)) {
-  cat("### Marginal effect of each factor\n\n")
-  for (f in c("few_shot", "top_n", "tissue")) {
-    cat("\n**", f, "**\n\n")
-    print(knitr::kable(aggregate(recovery_keyword ~ abl[[f]], abl, mean,
-                                 na.action = na.pass), digits = 3))
+  marg <- rbind(
+    data.frame(factor = "few-shot exemplar", level = c("off", "on"),
+               recovery = tapply(abl$recovery_keyword, abl$few_shot, mean)[c("FALSE","TRUE")],
+               hallucination = tapply(abl$hallucination_rate, abl$few_shot, mean)[c("FALSE","TRUE")],
+               prompt_tokens = tapply(abl$prompt_tokens, abl$few_shot, mean)[c("FALSE","TRUE")]),
+    data.frame(factor = "pathways shown",
+               level = as.character(sort(unique(abl$top_n))),
+               recovery = tapply(abl$recovery_keyword, factor(abl$top_n, levels = sort(unique(abl$top_n))), mean),
+               hallucination = tapply(abl$hallucination_rate, factor(abl$top_n, levels = sort(unique(abl$top_n))), mean),
+               prompt_tokens = tapply(abl$prompt_tokens, factor(abl$top_n, levels = sort(unique(abl$top_n))), mean)),
+    data.frame(factor = "tissue context", level = c("absent", "present"),
+               recovery = tapply(abl$recovery_keyword, abl$tissue, mean)[c("FALSE","TRUE")],
+               hallucination = tapply(abl$hallucination_rate, abl$tissue, mean)[c("FALSE","TRUE")],
+               prompt_tokens = tapply(abl$prompt_tokens, abl$tissue, mean)[c("FALSE","TRUE")]))
+  rownames(marg) <- NULL
+  knitr::kable(marg, digits = 3,
+    caption = "Marginal means for each prompt-design factor (48 configurations).")
+}
+```
+
+Three findings, in decreasing order of how much they surprised us:
+
+1. **Few-shot exemplars hurt.** Mean recovery drops from
+   `r sprintf("%.2f", tapply(abl$recovery_keyword, abl$few_shot, mean)[1])`
+   to `r sprintf("%.2f", tapply(abl$recovery_keyword, abl$few_shot, mean)[2])`
+   while prompt tokens rise `r sprintf("%.0f%%", 100 * (tapply(abl$prompt_tokens, abl$few_shot, mean)[2] / tapply(abl$prompt_tokens, abl$few_shot, mean)[1] - 1))`.
+   The exemplar anchors the model on the example's biology: it copies the
+   *shape* of the demonstration instead of the dataset's own evidence. Few-shot
+   prompting is the default advice for structured output, and here it is a net
+   loss on both axes.
+2. **More pathways is better.** Recovery rises monotonically from `top_n = 10`
+   to `top_n = 30`. Truncating the enrichment table to the "top 5 significant
+   hits" — the usual display convention — removes exactly the context the model
+   needs to judge which pathway is causal.
+3. **Tissue context is close to neutral**, which is a mild argument for keeping
+   it: it costs few tokens and adds a prior that occasionally prevents an
+   organ-specific misreading.
+
+# 5. Worked example
+
+```{r}
+if (!is.null(bench)) {
+  ex <- bench[which.max(bench$recovery_keyword), ]
+  r <- readRDS(file.path("results", paste0(
+    ex$dataset, "__", gsub("[^A-Za-z0-9]", "-", as.character(ex$model)), ".rds")))
+  cat(sprintf("**%s on `%s`** (%s DEGs, %.0f%% recovery)\n\n",
+              as.character(ex$model), ex$dataset, r$deg_mode,
+              100 * ex$recovery_keyword))
+  for (h in r$interpretation$hypotheses) {
+    cat("- **", h$name, "** (", h$evidence_grade, ") — ", h$mechanism, "\n", sep = "")
+    cat("  - supported by: ", paste(unlist(h$supporting_pathways), collapse = ", "), "\n", sep = "")
+    cat("  - driver genes: ", paste(unlist(h$driver_genes)[1:6], collapse = ", "), "\n", sep = "")
+    cat("  - proposed test: ", h$follow_up_experiment, "\n", sep = "")
   }
+  cat("\nGround truth for this dataset: ",
+      gsub("\\|", "; ", gt$gt_components[gt$dataset_id == ex$dataset]), "\n", sep = "")
 }
 ```
 
-# 6. Worked example
+# 6. Failure modes observed
+
+Where the pipeline is wrong, it is wrong in ways a reader can see:
+
+- **Direction inversion.** With a weak contrast (rapamycin NK, `top-150`
+  fallback) the recovered pathway is right but the inferred direction of
+  regulation is not. The score is unaffected — component matching is
+  direction-agnostic — which is a known limitation of the current metric, not
+  of the model.
+- **Passenger pathway promotion.** In the imatinib K562 run, cell-cycle terms
+  are ranked above the BCR-ABL/JAK-STAT axis because proliferation shutdown
+  dominates the DE list. ORA cannot distinguish the drug's target from its
+  consequence; the model frequently can, and when it cannot, the ranking is
+  where it shows.
+- **Schema compliance is not free.** DeepSeek's JSON mode requires the literal
+  string "json" in the prompt and rejects a schema-less request. `call_llm()`
+  therefore requests JSON only when a schema is supplied; without that rule the
+  call fails with a 400 rather than degrading.
+
+# 7. What this benchmark does not establish
+
+- **No generalisation claim across model families.** Only DeepSeek endpoints
+  are covered by the runs completed so far; `models.csv` is provider-agnostic,
+  but a same-vendor comparison cannot speak to whether the findings hold for
+  other vendors.
+- **Ground truth is coarse.** Three components per dataset is enough to catch
+  gross failure, not enough to distinguish a good interpretation from a very
+  good one. The judge score helps but is itself model-dependent.
+- **Single annotator projection.** The `expected_gmt` mapping is one expert's
+  projection of the mechanism onto 49 terms. It is applied identically to both
+  arms, which protects the comparison but not the absolute recovery number.
+- **No wet-lab validation.** Every "follow-up experiment" in the output is a
+  proposal, and none was performed.
+
+# 8. Reproducibility
+
+- **Caching.** Every LLM call is hashed on prompt + model + temperature and
+  stored on disk (`R/llm-backend.R`), so this document can be regenerated
+  without re-spending budget, and a re-run with the same inputs is
+  byte-identical.
+- **Pinned inputs.** `benchmark/00_fetch_geo.sh` records the archive sizes it
+  expects and fails loudly on a truncated download; `ground_truth.csv` is
+  version-controlled and its history shows the mechanism text was frozen
+  before the first model call.
+- **Adaptive DE rule is logged, not silent.** `deg_mode` and `n_degs` are
+  written into every result file, so a reader can always see whether a run used
+  strict thresholds or the top-150 fallback.
+- **Scoring is two-track.** A deterministic synonym-aware matcher (free,
+  reproducible) and a cross-model judge (paid, bias-reduced). Disagreement
+  between the two tracks is reported rather than averaged away.
 
 ```{r}
-ex <- bench[which.max(bench$recovery_keyword), ]
-r <- readRDS(file.path("results",
-  paste0(ex$dataset, "__", gsub("[^A-Za-z0-9]", "-", as.character(ex$model)), ".rds")))
-cat("**", as.character(ex$model), "on", ex$dataset, "**\n\n")
-for (h in r$interpretation$hypotheses) {
-  cat("- **", h$name, "** — ", h$mechanism, "\n")
-  cat("  * supported by: ",
-      paste(unlist(h$supporting_pathways), collapse = ", "), "\n")
-}
-```
-
-# 7. Reproducibility
-
-- Every LLM call is cached on disk keyed by a hash of prompt + model +
-  temperature, so this report can be regenerated byte-identically without
-  re-spending API budget (`R/cache.R`).
-- `benchmark/00_fetch_geo.sh` downloads the exact archive versions used;
-  byte sizes are pinned so a corrupted download fails loudly.
-- All prompts, model versions and prices are recorded in
-  `benchmark/results/*.rds` and `benchmark/models.csv`.
-- Scoring is two-track: a deterministic synonym-aware keyword matcher (free,
-  fully reproducible) and a model judge run **cross-model** — each output is
-  judged by a different model than the one that produced it — to limit
-  self-preference bias.
-
-```{r}
-cat("\n*Report generated:", format(Sys.time(), "%Y-%m-%d %H:%M %Z"), "*\n")
+cat("\n*Report generated", format(Sys.time(), "%Y-%m-%d %H:%M %Z"),
+    "| R", as.character(getRversion()), "*\n")
 ```

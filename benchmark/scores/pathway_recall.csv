@@ -1,0 +1,10 @@
+"dataset","arm","model","deg_mode","n_degs","n_ora","hit_at_5","hit_at_10","n_expected_hit","n_expected","rank_first_hit"
+"rapamycin_nk","ORA_only","none","topN",150,40,1,1,2,2,2
+"dexamethasone_organoid","ORA_only","none","strict",49,23,1,1,2,2,1
+"vorinostat_a498","ORA_only","none","strict",1150,49,0,0,3,3,35
+"imatinib_k562","ORA_only","none","strict",121,30,0,1,2,3,9
+"tnf_astrocyte","ORA_only","none","strict",792,50,1,1,2,2,2
+"lps_macrophage","ORA_only","none","strict",453,45,1,1,3,3,1
+"dexamethasone_organoid","LLM","deepseek-flash","strict",49,23,0,1,2,2,NA
+"rapamycin_nk","LLM","deepseek-flash","topN",150,40,1,1,1,2,NA
+"rapamycin_nk","LLM","deepseek-v4-pro","topN",150,40,1,1,1,2,NA

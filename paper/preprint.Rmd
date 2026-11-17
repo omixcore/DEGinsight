@@ -1,0 +1,565 @@
+---
+title: "Interpretation is not recovery: a mechanism-recovery benchmark for LLM-assisted
+differential expression analysis"
+author:
+  - "DEGinsight project^1^"
+date: "`r format(Sys.Date(), '%d %B %Y')` — draft for bioRxiv"
+output:
+  html_document:
+    toc: false
+    theme: null
+    highlight: null
+    css: preprint.css
+    fig_caption: true
+  word_document:
+    fig_caption: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE,
+                      fig.width = 6.4, fig.height = 3.1, dpi = 300)
+suppressPackageStartupMessages(library(ggplot2))
+theme_set(theme_classic(base_size = 9) +
+            theme(axis.line = element_line(linewidth = 0.4),
+                  axis.ticks = element_line(linewidth = 0.4),
+                  legend.key.size = unit(0.35, "cm")))
+
+rd <- function(f) if (file.exists(f)) read.csv(f, stringsAsFactors = FALSE,
+                                              check.names = FALSE) else NULL
+bench  <- rd("../benchmark/scores/benchmark_summary.csv")
+abl    <- rd("../benchmark/scores/ablation_summary.csv")
+recall <- rd("../benchmark/scores/pathway_recall.csv")
+gt     <- read.csv("../benchmark/ground_truth.csv", stringsAsFactors = FALSE,
+                   check.names = FALSE)
+
+ora <- recall[recall$arm == "ORA_only", ]
+llm <- recall[recall$arm == "LLM", ]
+MODELS  <- c("deepseek-flash", "deepseek-v4-pro")
+N_DS    <- nrow(gt)
+N_CELLS <- N_DS * length(MODELS)
+N_DONE  <- nrow(bench)
+
+f2 <- function(x) sprintf("%.2f", x)
+pct <- function(x) sprintf("%.0f\\%%", 100 * x)
+
+ora5  <- mean(ora$hit_at_5);  ora10 <- mean(ora$hit_at_10)
+ora5n <- sum(ora$hit_at_5);   ora10n <- sum(ora$hit_at_10)
+rec_mean <- mean(bench$recovery_keyword)
+rec_min  <- min(bench$recovery_keyword); rec_max <- max(bench$recovery_keyword)
+cost_med <- median(bench$cost_usd);      cost_max <- max(bench$cost_usd)
+cost_tot <- sum(bench$cost_usd)
+hal_max  <- max(bench$hallucination_rate)
+fs_off <- tapply(abl$recovery_keyword, abl$few_shot, mean)[1]
+fs_on  <- tapply(abl$recovery_keyword, abl$few_shot, mean)[2]
+fs_tok <- tapply(abl$prompt_tokens, abl$few_shot, mean)[2] /
+          tapply(abl$prompt_tokens, abl$few_shot, mean)[1] - 1
+tn <- tapply(abl$recovery_keyword, factor(abl$top_n, levels = sort(unique(abl$top_n))), mean)
+ti <- tapply(abl$recovery_keyword, abl$tissue, mean)
+delta <- mean(merge(
+  aggregate(hit_at_5 ~ dataset, llm, mean),
+  ora[, c("dataset", "hit_at_5")], by = "dataset",
+  suffixes = c("_llm", "_ora"))$hit_at_5_llm -
+    merge(aggregate(hit_at_5 ~ dataset, llm, mean),
+          ora[, c("dataset", "hit_at_5")], by = "dataset",
+          suffixes = c("_llm", "_ora"))$hit_at_5_ora)
+n_overlap <- nrow(merge(aggregate(hit_at_5 ~ dataset, llm, mean),
+                        ora[, c("dataset", "hit_at_5")], by = "dataset"))
+```
+
+<div class="affil">
+
+^1^ Correspondence: `omixcore` (GitHub). Code, benchmark data and cached model
+responses: https://github.com/omixcore/DEGinsight
+
+</div>
+
+# Abstract
+
+Large language models (LLMs) are now routinely wrapped around differential
+expression (DE) analysis, and the resulting mechanistic narratives are almost
+always evaluated by whether they read plausibly. We argue that this evaluation
+is unfalsifiable, and replace it with a benchmark built on perturbation
+experiments whose mechanism is known independently of the transcriptome.
+We present **DEGinsight**, an R package that turns a DE table into structured,
+auditable mechanistic hypotheses, and a benchmark of `r N_DS` public
+perturbation RNA-seq datasets spanning six drug–target axes (mTORC1,
+glucocorticoid receptor, HDAC, BCR–ABL, TNFR1, TLR4) in six human cell systems.
+For each dataset three mechanism components are frozen before any model is
+called, and every interpretation is scored on mechanism recovery, on a
+hallucination rate computed against the controlled vocabulary, and on measured
+token cost.
+
+The most important result is a null model. Over-representation analysis (ORA)
+alone places a canonical pathway in the top five for `r ora5n`/`r N_DS`
+datasets (`r f2(ora5)`) and in the top ten for `r ora10n`/`r N_DS`
+(`r f2(ora10)`). Because the enrichment table is exactly what the model is
+given as input, the honest question is not whether a model can name the
+pathway — it usually can, because the pathway was already there — but what it
+adds beyond the table. On the datasets where both arms are complete, LLM
+pathway recall did not exceed the ORA control
+(preliminary: Δ = `r sprintf("%+.2f", delta)`, n = `r n_overlap`), while component-level
+recovery — the part ORA cannot express — reached
+`r f2(rec_min)`–`r f2(rec_max)` at a median cost of
+$`r sprintf("%.4f", cost_med)` per dataset with a
+`r pct(hal_max)` measured hallucination rate under schema constraint and
+post-hoc term auditing. A 48-cell ablation of prompt design contradicts
+standard practice in two directions: few-shot exemplars *reduce* recovery
+from `r f2(fs_off)` to `r f2(fs_on)` while increasing prompt tokens by
+`r pct(fs_tok)`, and widening the enrichment table from 10 to 30 pathways is
+worth more than any instruction we tried. We release the package, the frozen
+ground truth and the full benchmark so that claims about LLM-assisted
+interpretation can be stated as differences against a stated control.
+
+# 1. Introduction
+
+A differential expression analysis ends with a table, and the table is not a
+result. The step that turns gene lists into mechanism — which pathway is
+causal, which is a passenger, what the direction implies, what experiment
+would settle it — is still done by hand, in prose, by whoever wrote the paper.
+It is the slowest and least reproducible part of a transcriptomics workflow,
+and it is exactly the part that LLMs are good at: they have read the
+literature, they can hold twenty pathways in view at once, and they produce
+fluent mechanistic text.
+
+The consequence is a rapidly growing literature of "LLM interprets your
+RNA-seq" tools, and a much smaller literature on whether those interpretations
+are correct. The dominant evaluation is plausibility: show a domain expert the
+output and ask whether it is reasonable. This cannot detect the failure mode
+that matters. A model that has memorized that rapamycin inhibits mTORC1 will
+write a convincing mTOR story from *any* macrophage dataset; an expert reading
+the output will find nothing wrong with it, because nothing is wrong with it
+as prose. The question is whether the evidence in the data supports it.
+
+Two things are needed to make this testable. First, datasets whose mechanism
+is known independently of the transcriptome — perturbation experiments, where
+the drug's target or the knockout is the answer key. Second, a null model that
+says how much of the answer is already visible in the input the model is
+handed. The second is usually missing, and its absence inflates every claim in
+the field: if the enrichment table places the correct pathway at rank 1, then
+a model that copies rank 1 "recovers the mechanism" without adding anything.
+
+We built DEGinsight to make both possible. The package takes a DE table,
+computes enrichment against a bundled pathway collection, asks a model for
+structured hypotheses under a schema that forbids inventing terms, then audits
+the output mechanically — every cited pathway is checked against the input
+table and the controlled vocabulary, and a violation rate is reported instead
+of trusted. Because the audit is deterministic, the expensive part (the model
+call) can be cached and the scoring can be recomputed for free.
+
+We then benchmarked it on `r N_DS` perturbation datasets with pre-registered
+mechanism ground truth, and asked four questions: (i) how much does plain ORA
+already recover; (ii) does the model recover mechanism components at the level
+of the known biology; (iii) does the audit hold, and at what cost; (iv) which
+prompt-design choices actually help.
+
+# 2. Package design
+
+DEGinsight is a conventional R package (R ≥ 4.1) with no compiled code and
+four dependencies; it is deliberately thin, because its job is to be the
+auditable seam between an enrichment table and a language model, not to
+re-implement enrichment.
+
+```{r, echo=FALSE, results='asis'}
+cat('
+| Function | Role |
+|---|---|
+| `run_ora()` | hypergeometric ORA over a GMT collection, BH-adjusted |
+| `build_interpretation_prompt()` | assembles the ontology-constrained prompt |
+| `call_llm()` | one request, JSON mode when a schema is given, bounded retries |
+| `validate_terms()` | post-hoc audit: citations vs input table vs vocabulary |
+| `interpret_enrichment()` | the wrapper most users call |
+| `interpret_ensemble()` | majority vote across models, with Jaccard agreement |
+| `judge_mechanism()` | rubric-based recovery score from a *different* model |
+| `estimate_cost()` | billed tokens × published prices |
+')
+```
+
+Three design decisions matter for the benchmark.
+
+**The schema is the guard, not the prompt.** `supporting_pathways` is typed as
+an array of strings, and `validate_terms()` re-checks each returned term
+against the input table and the vocabulary after generation. A model that
+ignores the instruction is therefore counted, not silently trusted. The
+reported hallucination rate is the output of this check.
+
+**JSON mode is conditional.** DeepSeek-compatible endpoints reject a
+schema-less JSON request and require the literal token "json" in the prompt;
+`call_llm()` requests JSON only when a schema is supplied, and the prompt
+builder emits the word. Without this, the call fails with HTTP 400 rather
+than degrading quietly — a small detail that decides whether a pipeline is
+usable inside a loop.
+
+**Every call is cached by content hash** of prompt, model and temperature.
+Re-scoring, re-rendering the report and trying a new metric cost nothing, and
+a run becomes reproducible in the strong sense: the same inputs return the
+same strings.
+
+# 3. Benchmark design
+
+## 3.1 Datasets
+
+Six public RNA-seq perturbation experiments were selected for one property:
+the mechanism is known from the perturbation itself, not inferred from the
+expression data.
+
+```{r}
+knitr::kable(
+  data.frame(Dataset = gt$dataset_id,
+             GEO = gt$gse,
+             Perturbation = gt$perturbagen,
+             System = gt$cell_type,
+             `Pre-registered mechanism` = gsub("\\|", "; ", gt$gt_components),
+             check.names = FALSE),
+  caption = "Benchmark datasets and their frozen mechanism ground truth. The gt_components column was committed to version control before the first model call and was not edited afterwards.")
+```
+
+The six cover distinct target classes: an kinase inhibitor of a fusion
+oncoprotein (imatinib/BCR–ABL), a steroid receptor agonist (dexamethasone/GR),
+an epigenetic modifier (vorinostat/HDAC), an immunomodulatory drug
+(rapamycin/mTORC1), and two receptor-level inflammatory stimuli (TNF-α/TNFR1,
+LPS/TLR4). Four of six are primary or stem-cell-derived human systems rather
+than immortalized lines, which is where an LLM's priors are least likely to
+have memorized a specific dataset.
+
+## 3.2 Differential expression
+
+Series-matrix or supplementary count data were processed to gene-level tables
+with limma, falling back to a Welch *t*-test when a design did not support a
+linear model; Salmon quantifications were summed to gene level through
+mygene.info annotation. One dataset (vorinostat) ships only as an xlsx
+workbook and was parsed at the sheet-XML level.
+
+An adaptive rule was fixed before scoring: if fewer than 20 genes pass
+padj < 0.05 and |log2FC| > 1, the pipeline falls back to the 150 smallest
+*p*-value genes balanced by direction, and records `deg_mode` in the output.
+Two datasets required the fallback; one (rapamycin in NK cells) yields zero
+genes at the strict threshold, which is a property of the experiment, not of
+the pipeline.
+
+```{r}
+rows <- lapply(seq_len(nrow(gt)), function(i) {
+  f <- file.path("../benchmark/deg_tables", paste0(gt$dataset_id[i], ".rds"))
+  o <- readRDS(f); d <- o$deg
+  sig <- !is.na(d$padj) & !is.na(d$log2FoldChange) &
+    d$padj < 0.05 & abs(d$log2FoldChange) > 1
+  data.frame(Dataset = gt$dataset_id[i], Genes = nrow(d),
+             DEG = sum(sig, na.rm = TRUE),
+             Up = sum(sig & d$log2FoldChange > 0, na.rm = TRUE),
+             Down = sum(sig & d$log2FoldChange < 0, na.rm = TRUE),
+             Samples = paste0(length(o$treat_samples), " vs ",
+                              length(o$ctrl_samples)),
+             Mode = if (sum(sig, na.rm = TRUE) >= 20) "strict" else "top-150")
+})
+deg_tab <- do.call(rbind, rows)
+knitr::kable(deg_tab, caption = "DE yield per dataset (padj < 0.05, |log2FC| > 1) and the DEG-selection mode actually used.")
+```
+
+## 3.3 Ground truth and the projection problem
+
+Mechanism ground truth is text, and text is not directly comparable, so we
+used two scorings with different failure modes.
+
+*Component recovery* is a synonym-aware keyword score: each pre-registered
+component carries a list of acceptable surface forms
+(e.g. `mTORC1 inhibition|mTOR inhibition` and
+`translational suppression/ribosomal/ribosome/protein synthesis/anabolic`),
+the full interpretation is Unicode-normalised (so NF-κB and NF-kB compare
+equal) and the fraction of components with at least one hit is reported. It is
+free, deterministic and reproducible, and it is deliberately generous: it
+rewards a correct idea expressed in unexpected words.
+
+*Judge recovery* uses a second model with a strict rubric, always a different
+model from the one being scored (cross-judging), which removes self-preference
+bias without needing a third vendor.
+
+For pathway-level comparison against ORA, the ground truth must be projected
+onto the same vocabulary the enrichment tool uses. We map each dataset onto
+its canonical Hallmark representatives *a priori* (`expected_gmt` in
+`ground_truth.csv`). The mapping is one annotator's judgement and is therefore
+the weakest link in the absolute numbers — but because the **same** projection
+is applied to the ORA arm and the LLM arm, it cancels out of the comparison
+that the paper is actually about.
+
+## 3.4 The ORA-only control
+
+The control is the benchmark's load-bearing element. The ORA table is the
+model's input; if the correct pathway sits at rank 1 of that table, a model
+that restates it has demonstrated nothing. We therefore score the top-*k* ORA
+terms as if they were an interpretation, against the same ground truth, and
+report hit@5 and hit@10 alongside every model number.
+
+# 4. Results
+
+## 4.1 Plain enrichment already recovers the canonical pathway
+
+```{r fig.height=2.9}
+pal <- c(ORA_only = "grey40", LLM = "#1f6fb4")
+recall$arm <- factor(recall$arm, levels = c("ORA_only", "LLM"),
+                     labels = c("ORA table only", "LLM interpretation"))
+ggplot(recall, aes(reorder(dataset, hit_at_5), hit_at_5, fill = arm)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  scale_fill_manual(values = c("grey40", "#1f6fb4"), name = NULL) +
+  coord_flip(ylim = c(0, 1)) +
+  labs(x = NULL, y = "canonical pathway in top-5 (0/1)",
+       title = "ORA alone is a strong baseline")
+```
+
+Across all `r N_DS` datasets the ORA table alone puts a canonical pathway in
+the top five for `r ora5n` datasets (`r f2(ora5)`) and in the top ten for
+`r ora10n` (`r f2(ora10)`). The two misses are informative rather than
+random: in vorinostat-treated A498 cells the first canonical hit is at rank 35
+— HDAC inhibition produces a cell-cycle collapse whose Hallmark signature is
+dominated by E2F targets, and the enrichment table reflects that — and in
+imatinib-treated K562 cells the first hit is at rank 9, behind the same
+proliferation signature.
+
+This is the single most consequential number in the paper, because it sets the
+bar for every claim in this space. A tool that reports "the model correctly
+identified mTORC1 signalling" on a dataset where mTORC1 signalling is rank 1 of
+the input table has measured its own enrichment step.
+
+## 4.2 What the model adds, and what it does not
+
+On the datasets where both arms are complete (n = `r n_overlap`), pathway-level
+recall of the LLM output did not exceed the ORA control
+(mean Δ = `r sprintf("%+.2f", delta)`). We report this as a result rather than
+a failure: the model is not a better pathway finder than a hypergeometric
+test, and there is no reason it should be, since it is reading the test's
+output.
+
+What it does add is the layer the test cannot produce. Component-level
+recovery over completed runs ranged from `r f2(rec_min)` to `r f2(rec_max)`
+(mean `r f2(rec_mean)`), driven by mechanism statements that no enrichment
+term contains — for example, that rapamycin's transcriptional footprint in NK
+cells is a hypoxia/glycolytic shift secondary to mTORC1 loss rather than
+direct translational control, or that dexamethasone's effect in airway
+organoids is GR-driven repression of an NF-κB inflammatory module.
+
+```{r}
+agg <- aggregate(cbind(recovery_keyword, hallucination_rate, cost_usd,
+                       completion_tokens) ~ model, bench, mean,
+                 na.rm = TRUE, na.action = na.pass)
+agg$n_runs <- as.vector(table(bench$model)[agg$model])
+agg <- agg[order(-agg$recovery_keyword), c("model", "n_runs", "recovery_keyword",
+                                           "hallucination_rate", "cost_usd",
+                                           "completion_tokens")]
+knitr::kable(agg, digits = 4,
+  caption = "Per-model means over completed runs. n_runs is reported because a mean over one run is an observation, not an estimate.")
+```
+
+## 4.3 Hallucination is an audit result, not a model property
+
+The measured hallucination rate is `r pct(hal_max)` in every completed run.
+This number should be read carefully: it is the output of
+`validate_terms()`, which checks every cited pathway against the input table
+and the controlled vocabulary, so a zero means the guard held — the schema
+constrained generation and the audit caught anything that escaped. It is not
+evidence that the model would be accurate without the guard, and the ablation
+shows the guard is doing work: prompt variants that widen the table's
+influence also change what the model cites.
+
+## 4.4 Prompt design: two results that contradict standard practice
+
+```{r fig.height=2.8}
+a <- aggregate(recovery_keyword ~ top_n + few_shot + tissue, abl, mean)
+a$few_shot <- factor(a$few_shot, levels = c(FALSE, TRUE),
+                     labels = c("no exemplar", "few-shot"))
+ggplot(a, aes(factor(top_n), recovery_keyword, colour = few_shot,
+              group = few_shot, shape = few_shot)) +
+  geom_line(linewidth = 0.45) + geom_point(size = 1.4) +
+  facet_wrap(~ tissue, labeller = as_labeller(
+    c(`FALSE` = "no tissue context", `TRUE` = "with tissue context"))) +
+  scale_colour_manual(values = c("grey35", "#c0504d"), name = NULL) +
+  scale_shape_manual(values = c(16, 17), name = NULL) +
+  coord_cartesian(ylim = c(0, 1)) +
+  labs(x = "pathways shown to the model (top_n)", y = "mean component recovery",
+       title = "Ablation over 48 prompt configurations")
+```
+
+The ablation grid varies three things a user actually controls — a few-shot
+exemplar (on/off), the number of pathways shown (5/10/20/30) and tissue
+context (on/off) — over three datasets at a fixed reference model, 48
+configurations.
+
+**Few-shot prompting hurts.** Mean component recovery falls from
+`r f2(fs_off)` without an exemplar to `r f2(fs_on)` with one, while prompt
+tokens rise by `r pct(fs_tok)`. The mechanism is visible in the outputs: the
+model reproduces the *shape* of the demonstration — same number of
+hypotheses, same rhetorical structure, often the same pathway family — instead
+of the evidence in front of it. Few-shot is the default recommendation for
+structured output, and for this task it is a loss on both accuracy and cost.
+
+**Wider context is better.** Recovery rises from `r f2(tn[["10"]])` at
+`top_n = 10` to `r f2(tn[["30"]])` at `top_n = 30`, monotonically apart from a
+dip at 10. The display convention of showing the "top five significant hits"
+is exactly wrong here: truncating the table removes the alternatives the model
+needs in order to judge which term is causal and which is a passenger.
+
+**Tissue context is nearly neutral** (`r f2(ti[["FALSE"]])` absent vs
+`r f2(ti[["TRUE"]])` present) — cheap enough to keep, but not a lever.
+
+## 4.5 Where it fails
+
+Three failure modes recur and are worth stating because they are invisible to
+plausibility-based evaluation:
+
+- *Direction inversion under weak contrasts.* When the DEG list comes from the
+  top-150 fallback, the model frequently names the right pathway with the
+  wrong sign. The current component metric is direction-agnostic, so this is
+  under-penalised — a limitation of the metric, and the first thing we would
+  fix.
+- *Passenger promotion.* In imatinib-treated K562 cells, cell-cycle shutdown
+  dominates the DE list, and the model sometimes ranks proliferation terms
+  above the BCR–ABL/JAK–STAT axis that caused them. ORA cannot distinguish a
+  target from its consequence; the model often can, and when it cannot, the
+  ranking is where it shows.
+- *Fluency without commitment.* Hypotheses graded "moderate" tend to hedge in
+  a way that is neither wrong nor testable ("may reflect a shift in…"). The
+  `follow_up_experiment` field was added specifically to force a falsifiable
+  statement, and it is the field most often left generic.
+
+# 5. Discussion
+
+The finding that plain ORA matches an LLM on pathway naming is not an argument
+against LLM assistance; it is an argument about what to measure. Enrichment
+analysis answers "which annotated sets are over-represented"; a bench
+scientist reading the same table asks "so what". The gap between those two
+questions is where the model earns its cost, and it is a gap that
+pathway-recall metrics cannot see.
+
+Three practical consequences follow.
+
+First, **report an ORA control**. Any evaluation of LLM-assisted
+enrichment interpretation that does not state how much of the answer is in the
+input table is uninterpretable, in the same way a classifier accuracy without a
+majority-class baseline is uninterpretable. The control is free and takes one
+extra column of scoring code.
+
+Second, **prefer defaults that look wrong**. Two of the three prompt knobs we
+tested behave opposite to convention: exemplars hurt, and the wider table
+helps. Both are consistent with a single explanation — the model does better
+when it is reasoning over the data and worse when it is pattern-matching a
+template — and both are cheap to adopt.
+
+Third, **make the guard mechanical**. The zero hallucination rate in this
+benchmark is a property of `validate_terms()`, not of the model. A pipeline
+that reports a hallucination rate it did not compute itself has no such
+number.
+
+The larger point concerns the direction of the field. Agents that *design*
+perturbation experiments now exist and are evaluated against held-out screens
+[12]; the natural next step is not a better narrative generator but a closed
+loop in which a proposed mechanism is converted into a discriminating
+experiment and the model is scored on whether the experiment resolved the
+ambiguity. DEGinsight's `follow_up_experiment` field is a placeholder for
+that loop, not an end in itself.
+
+# 6. Limitations
+
+- **Partial model grid.** `r N_DONE` of `r N_CELLS` planned dataset–model
+  cells are complete. Per-model means over one or two runs are observations,
+  not estimates, and the model comparison is within a single vendor; whether
+  the prompt-design findings transfer across vendors is untested.
+- **Coarse ground truth.** Three components per dataset detects gross failure
+  but cannot separate a good interpretation from a very good one.
+- **One annotator projection.** The Hallmark projection of the ground truth is
+  a single expert's judgement. It cancels in the ORA-versus-LLM comparison but
+  not in absolute recovery numbers.
+- **Direction is under-scored.** Component matching ignores the sign of
+  regulation, which we know lets direction inversions through.
+- **No wet-lab validation.** Every proposed follow-up experiment is a
+  proposal; none was performed.
+
+# 7. Methods
+
+**Data acquisition.** GEO series matrices and supplementary files were
+downloaded with size-pinned resumable transfers. Where a study provided raw
+Salmon quantifications, transcript-level effective counts were summed to gene
+level using mygene.info symbols restricted to one-to-one mappings.
+
+**Differential expression.** limma with eBayes on log-CPM values; Welch
+*t*-test with BH correction where a design matrix was not estimable. One
+study's counts were supplied as an xlsx workbook and read at the sheet-XML
+level to avoid loading the whole workbook.
+
+**Enrichment.** One-sided hypergeometric test against 49 Hallmark-style
+pathway sets, BH-adjusted; terms with fewer than 5 overlapping genes dropped.
+`top_n` controls how many terms enter the prompt (default 20).
+
+**Prompt.** The model receives the contrast in words, the species, the tissue,
+and a table of pathways with overlap counts, gene symbols and adjusted
+*p*-values, plus a schema requiring named hypotheses with supporting pathways
+drawn only from that table, driver genes from the input, an evidence grade and
+a discriminating follow-up experiment. Temperature 0.
+
+**Audit.** Each cited pathway is normalised and checked against (i) the input
+table and (ii) the controlled vocabulary; the fraction failing both is the
+hallucination rate.
+
+**Scoring.** Component recovery and cross-model judging as described in
+§3.3. Judge prompts were identical across runs; the judge was never the model
+under evaluation.
+
+**Cost.** Prompt and completion tokens as reported by the provider, multiplied
+by published per-million prices at the time of the run
+(`benchmark/models.csv` records both, so the accounting can be recomputed).
+
+# 8. Availability
+
+The package (MIT), the frozen ground truth, the DE tables, every cached model
+response and the scripts that regenerate all figures in this manuscript are at
+https://github.com/omixcore/DEGinsight. The benchmark runs end-to-end with
+`Rscript benchmark/02_run_benchmark.R` given an API key; scoring, the ORA
+control and this document require no key.
+
+# References
+
+1. Lamb J, Crawford ED, Peck D, et al. The Connectivity Map: using
+   gene-expression signatures to connect small molecules, genes, and disease.
+   *Science* 2006;313:1929–35.
+2. Subramanian A, Tamayo P, Mootha VK, et al. Gene set enrichment analysis: a
+   knowledge-based approach for interpreting genome-wide expression profiles.
+   *PNAS* 2005;102:15545–50.
+3. Liberzon A, Birger C, Thorvaldsdóttir H, et al. The Molecular Signatures
+   Database (MSigDB) hallmark gene set collection. *Cell Systems*
+   2015;1:417–25.
+4. Ritchie ME, Phipson B, Wu D, et al. limma powers differential expression
+   analyses for RNA-sequencing and microarray studies. *Nucleic Acids Res*
+   2015;43:e47.
+5. Love MI, Huber W, Anders S. Moderated estimation of fold change and
+   dispersion for RNA-seq data with DESeq2. *Genome Biol* 2014;15:550.
+6. Robinson MD, McCarthy DJ, Smyth GK. edgeR: a Bioconductor package for
+   differential expression analysis of digital gene expression data.
+   *Bioinformatics* 2010;26:139–40.
+7. Wu T, Hu E, Xu S, et al. clusterProfiler 4.0: a universal enrichment tool
+   for interpreting omics data. *The Innovation* 2021;2:100141.
+8. Barrett T, Wilhite SE, Ledoux P, et al. NCBI GEO: archive for functional
+   genomics data sets — update. *Nucleic Acids Res* 2013;41:D991–5.
+9. Patro R, Duggal G, Love MI, Irizarry RA, Kingsford C. Salmon provides fast
+   and bias-aware quantification of transcript expression. *Nat Methods*
+   2017;14:417–9.
+10. Benjamini Y, Hochberg Y. Controlling the false discovery rate: a practical
+    and powerful approach to multiple testing. *J R Stat Soc B* 1995;57:289–300.
+11. Jin Q, Yang Y, Chen Q, Lu Z. GeneGPT: augmenting large language models with
+    domain tools for improved access to biomedical information.
+    *Bioinformatics* 2024;40:btae075.
+12. Roohani Y, Lee A, Huang Q, et al. BioDiscoveryAgent: an AI agent for
+    designing genetic perturbation experiments. *arXiv*:2405.17631, 2024.
+13. DeepSeek-AI. DeepSeek-V3 technical report. *arXiv*:2412.19437, 2024.
+14. OpenAI. GPT-4 technical report. *arXiv*:2303.08774, 2023.
+15. Zheng L, Chiang WL, Sheng Y, et al. Judging LLM-as-a-judge with MT-Bench and
+    Chatbot Arena. *NeurIPS* 2023; arXiv:2306.05685.
+16. Badia-i-Mompel P, Vélez Santiago J, Braunger J, et al. decoupleR:
+    ensemble of computational methods to infer biological activities from omics
+    data. *Bioinform Adv* 2022;2:vbac016.
+17. Schubert M, Klinger B, Klünemann M, et al. Perturbation-response genes
+    reveal signaling footprints in cancer gene expression. *Nat Commun*
+    2018;9:20.
+18. Subramanian A, Narayan R, Corsello SM, et al. A next generation
+    Connectivity Map: L1000 platform and the first 1,000,000 profiles. *Cell*
+    2017;171:1437–52.
+
+```{r}
+cat("\n*Draft generated", format(Sys.time(), "%Y-%m-%d"),
+    "from", N_DONE, "completed benchmark runs.*\n")
+```

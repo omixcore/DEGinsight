@@ -68,12 +68,36 @@ render_report(out$ora, out$interpretation, "report.html")
 - **Privacy option** — point `LLM_BASE_URL` at a local Ollama instance for
   controlled data.
 
-## Benchmark (in progress)
+## Benchmark
 
-We are benchmarking 6+ LLMs on mechanistic recovery using perturbation
-datasets with known ground-truth mechanisms (LINCS, GEO knockdown series).
-Metrics: mechanism recall, hallucination rate, confidence calibration and
-cost-performance trade-off. Results will be posted on bioRxiv.
+Six public perturbation RNA-seq datasets in which the mechanism is known
+independently of the transcriptome (mTORC1, glucocorticoid receptor, HDAC,
+BCR-ABL, TNFR1, TLR4), three pre-registered mechanism components per dataset,
+and three measured quantities: mechanism recovery, hallucination rate under a
+mechanical term audit, and token cost.
+
+The benchmark's load-bearing control is **ORA-only**: the enrichment table the
+model is handed is itself scored against the ground truth. Plain ORA places a
+canonical pathway in the top five for 4/6 datasets and in the top ten for 5/6
+— so a claim that "the model found the pathway" mostly measures the enrichment
+step. The interesting quantity is component-level mechanism recovery
+(0.00–0.67 across completed runs, $0.005 per dataset median) and the prompt
+design that maximises it.
+
+Two results contradict standard practice: few-shot exemplars *reduce* recovery
+(0.80 → 0.64) while raising tokens by 31%, and widening the pathway table from
+10 to 30 terms is worth more than any instruction we tried.
+
+| document | contents |
+|---|---|
+| [`benchmark/05_report.Rmd`](benchmark/05_report.Rmd) | full benchmark report; renders to HTML from the CSVs |
+| [`paper/preprint.Rmd`](paper/preprint.Rmd) | bioRxiv-style manuscript draft ([docx](paper/preprint.docx) alongside) |
+| [`benchmark/README.md`](benchmark/README.md) | how to reproduce every number |
+
+The ORA control (`benchmark/04b_baseline_ora.R`) and both documents render
+without an API key. The LLM grid is partially complete; the coverage table at
+the top of each document states exactly how many cells are filled, and no
+number is imputed.
 
 ## Citation
 
