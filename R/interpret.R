@@ -25,7 +25,7 @@
 #' res <- interpret_enrichment(example_ora,
 #'                             contrast = "TNF vs control",
 #'                             species = "Homo sapiens",
-#'                             model = "deepseek-chat")
+#'                             model = "deepseek-flash")
 #' res$hypotheses
 #' }
 #'
@@ -36,8 +36,8 @@ interpret_enrichment <- function(enrichment,
                                  tissue = NULL,
                                  direction = c("mixed", "up", "down"),
                                  top_n = 20,
-                                 model = "deepseek-chat",
-                                 base_url = Sys.getenv("LLM_BASE_URL", "https://api.deepseek.com/v1"),
+                                 model = "deepseek-flash",
+                                 base_url = Sys.getenv("LLM_BASE_URL", "https://api.deepseek.com"),
                                  api_key = Sys.getenv("LLM_API_KEY"),
                                  vocabulary = NULL,
                                  few_shot = FALSE,
@@ -45,13 +45,17 @@ interpret_enrichment <- function(enrichment,
   p <- build_interpretation_prompt(enrichment, contrast, species, tissue,
                                    match.arg(direction), top_n,
                                    few_shot = few_shot)
-  raw <- call_llm(p$prompt, system = p$system, model = model,
-                  base_url = base_url, api_key = api_key,
-                  response_schema = p$schema, ...)
-
-  valid_terms <- unique(c(vocabulary, enrichment$pathway))
-  validation <- validate_terms(raw, reference_terms = valid_terms,
-                               input_pathways = enrichment$pathway)
+  raw <- if (length(p$input_pathways)) {
+    call_llm(p$prompt, system = p$system, model = model,
+             base_url = base_url, api_key = api_key, response_schema = p$schema, ...)
+  } else {
+    list(hypotheses = list(), flagged_pathways = list(),
+         overall_summary = "No pathways with overlapping genes were supplied.")
+  }
+  validation <- validate_terms(raw, reference_terms = vocabulary,
+                               input_pathways = p$input_pathways)
+  drivers <- unique(unlist(lapply(raw$hypotheses, function(h) h$driver_genes)))
+  validation$unsupported_driver_genes <- setdiff(drivers, p$input_genes)
 
   out <- list(
     hypotheses = raw$hypotheses %||% list(),
@@ -60,7 +64,9 @@ interpret_enrichment <- function(enrichment,
     validation = validation,
     model = attr(raw, "model") %||% model,
     tokens = attr(raw, "usage"),
-    prompt = p$prompt
+    prompt = p$prompt,
+    input_pathways = p$input_pathways,
+    input_genes = p$input_genes
   )
   class(out) <- "deginsight_interpretation"
   out
@@ -80,6 +86,9 @@ interpret_enrichment <- function(enrichment,
 #' @param models Character vector of one or more model IDs. If length > 1,
 #'   an ensemble interpretation is produced via
 #'   \code{\link{interpret_ensemble}}.
+#' @param contrast,species Experiment context passed to the interpretation prompt.
+#' @param direction DEG selection mode: mixed, up, down, or split.
+#'   Split mode returns a named list with separate up and down results.
 #' @param ... Passed to \code{\link{interpret_enrichment}} /
 #'   \code{\link{interpret_ensemble}}.
 #'
@@ -91,7 +100,7 @@ interpret_enrichment <- function(enrichment,
 #' out <- interpret_deg(my_deg, gene_col = "symbol", padj_col = "padj",
 #'                      logfc_col = "log2FoldChange", gene_sets = gs,
 #'                      contrast = "treated vs control", species = "Homo sapiens",
-#'                      models = c("deepseek-chat", "kimi-k2"))
+#'                      models = c("deepseek-flash", "deepseek-v4-pro"))
 #' }
 #'
 #' @export
@@ -103,34 +112,52 @@ interpret_deg <- function(deg,
                           logfc_cutoff = 1,
                           universe = NULL,
                           gene_sets,
-                          models = "deepseek-chat",
+                          models = "deepseek-flash",
                           contrast,
                           species,
-                          ...) {
-  sig <- rep(TRUE, nrow(deg))
+                          ...,
+                          direction = c("mixed", "up", "down", "split")) {
+  direction <- match.arg(direction)
+  if (!is.data.frame(deg) || !all(c(gene_col, padj_col, logfc_col) %in% names(deg))) {
+    stop("DEG table is missing a requested column.")
+  }
+  if ((!is.null(padj_col) && !is.numeric(deg[[padj_col]])) ||
+      (!is.null(logfc_col) && !is.numeric(deg[[logfc_col]]))) {
+    stop("Adjusted p-values and log fold changes must be numeric.")
+  }
+  if (direction != "mixed" && is.null(logfc_col)) stop("Supply logfc_col for directional analysis.")
+  gene_ids <- as.character(deg[[gene_col]])
+  tested <- !is.na(gene_ids) & nzchar(gene_ids)
+  if (!is.null(padj_col)) tested <- tested & is.finite(deg[[padj_col]])
+  if (!is.null(logfc_col)) tested <- tested & is.finite(deg[[logfc_col]])
+  sig <- tested
   if (!is.null(padj_col)) sig <- sig & deg[[padj_col]] < padj_cutoff
   if (!is.null(logfc_col)) sig <- sig & abs(deg[[logfc_col]]) > logfc_cutoff
-  genes <- deg[[gene_col]][sig]
-  universe <- universe %||% deg[[gene_col]]
+  universe <- universe %||% gene_ids[tested]
 
-  ora <- run_ora(genes, universe, gene_sets)
-
-  interp <- if (length(models) == 1) {
-    interpret_enrichment(ora, contrast = contrast, species = species,
-                         model = models, ...)
-  } else {
-    interpret_ensemble(ora, contrast = contrast, species = species,
-                       models = models, ...)
+  analyse <- function(mode) {
+    selected <- sig
+    if (mode == "up") selected <- selected & deg[[logfc_col]] > 0
+    if (mode == "down") selected <- selected & deg[[logfc_col]] < 0
+    ora <- run_ora(intersect(gene_ids[selected], universe), universe, gene_sets)
+    interp <- if (length(models) == 1L) {
+      interpret_enrichment(ora, contrast = contrast, species = species,
+                           model = models, direction = mode, ...)
+    } else {
+      interpret_ensemble(ora, contrast = contrast, species = species,
+                         models = models, direction = mode, ...)
+    }
+    list(ora = ora, interpretation = interp)
   }
-
-  list(ora = ora, interpretation = interp)
+  if (direction == "split") return(list(up = analyse("up"), down = analyse("down")))
+  analyse(direction)
 }
 
 #' @export
 print.deginsight_interpretation <- function(x, ...) {
   cat("DEGinsight interpretation (model:", x$model, ")\n")
   cat("  hypotheses:", length(x$hypotheses),
-      " | hallucination rate:",
+      " | unrecognized pathway rate:",
       sprintf("%.1f%%", 100 * x$validation$hallucination_rate), "\n")
   for (h in x$hypotheses) {
     cat(sprintf("- [%s] %s\n", h$evidence_grade %||% "?", h$name %||% "?"))

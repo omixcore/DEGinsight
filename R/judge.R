@@ -35,8 +35,8 @@
 judge_mechanism <- function(interpretation,
                             gt_components,
                             gt_context,
-                            model = "deepseek-chat",
-                            base_url = Sys.getenv("LLM_BASE_URL", "https://api.deepseek.com/v1"),
+                            model = "deepseek-flash",
+                            base_url = Sys.getenv("LLM_BASE_URL", "https://api.deepseek.com"),
                             api_key = Sys.getenv("LLM_API_KEY"),
                             ...) {
   hyp_text <- hypotheses_to_text(interpretation)
@@ -64,12 +64,22 @@ judge_mechanism <- function(interpretation,
                   response_schema = schema, ...)
 
   verdicts <- raw$verdicts %||% list()
-  per_component <- do.call(rbind, lapply(verdicts, function(v) {
-    data.frame(component = v$component %||% NA_character_,
-               recovered = isTRUE(v$recovered),
-               justification = v$justification %||% NA_character_,
-               stringsAsFactors = FALSE)
-  }))
+  labels <- vapply(verdicts, function(v) {
+    if (!is.list(v) || !is.character(v$component) || length(v$component) != 1L ||
+        !is.logical(v$recovered) || length(v$recovered) != 1L || is.na(v$recovered) ||
+        !is.character(v$justification) || length(v$justification) != 1L) {
+      stop("Invalid judge verdict structure.")
+    }
+    v$component
+  }, character(1))
+  if (length(labels) != length(gt_components) || anyDuplicated(labels) ||
+      !setequal(labels, gt_components)) stop("Judge must return one verdict per ground-truth component.")
+  verdicts <- verdicts[match(gt_components, labels)]
+  per_component <- data.frame(
+    component = gt_components,
+    recovered = vapply(verdicts, function(v) v$recovered, logical(1)),
+    justification = vapply(verdicts, function(v) v$justification, character(1))
+  )
 
   list(per_component = per_component,
        recovery_rate = if (nrow(per_component)) mean(per_component$recovered) else NA_real_,
@@ -80,13 +90,17 @@ judge_mechanism <- function(interpretation,
 #' @rdname judge_mechanism
 #' @export
 score_recovery_keywords <- function(interpretation, gt_components) {
-  text <- normalize_omics_text(hypotheses_to_text(interpretation))
+  text <- paste(vapply(interpretation$hypotheses, function(h) {
+    paste(h$name, h$mechanism)
+  }, character(1)), collapse = " ")
+  text <- paste0(" ", normalize_omics_text(text), " ")
   per_component <- do.call(rbind, lapply(gt_components, function(comp) {
     # synonyms separated by "|" or "/" (e.g. "mTOR|mTORC1",
     # "translational/ribosomal suppression")
-    kws <- trimws(strsplit(comp, "[|/]")[[1]])
-    hit <- any(vapply(normalize_omics_text(kws),
-                      function(k) grepl(k, text, fixed = TRUE),
+    kws <- normalize_omics_text(trimws(strsplit(comp, "[|/]")[[1]]))
+    kws <- kws[nzchar(kws)]
+    hit <- any(vapply(kws,
+                      function(k) grepl(paste0(" ", k, " "), text, fixed = TRUE),
                       logical(1)))
     data.frame(component = comp, recovered = hit,
                justification = if (hit) "keyword match" else "no keyword match",
@@ -105,7 +119,7 @@ normalize_omics_text <- function(x) {
   x <- tolower(x)
   x <- chartr("\u03b1\u03b2\u03b3\u03b4\u03ba\u03bb\u03bc\u03c0\u03c4", "abdgklmpt", x)
   x <- gsub("[\u2013\u2014\u2012]", "-", x)
-  gsub("[''\"]", "", x)
+  trimws(gsub("[^[:alnum:]]+", " ", x))
 }
 
 #' Flatten hypotheses into plain text for scoring

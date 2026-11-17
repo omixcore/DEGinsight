@@ -1,25 +1,22 @@
 Package: DEGinsight
 Title: LLM-Assisted Pathway and Mechanism Interpretation of Bulk RNA-seq
     Differential Expression Results
-Version: 0.1.0
+Version: 0.0.1
 Authors@R:
     person(given = "omixcore",
-           family = "",
            role = c("aut", "cre"),
            email = "1264284076@qq.com")
-Description: Interprets differential gene expression (DEG) results from bulk
-    RNA-seq experiments by combining classical enrichment analysis (ORA/GSEA)
-    with large language model (LLM) reasoning. DEGinsight builds structured,
-    ontology-constrained prompts from enrichment results, queries one or more
-    LLMs through a unified OpenAI-compatible backend, validates model outputs
-    against controlled vocabularies (GO, KEGG, Reactome) to quantify and
-    suppress hallucinations, and integrates multi-model votes into
-    evidence-graded mechanistic hypotheses. A reproducible HTML report and
-    cost-estimation utilities are included.
+Description: Interprets differential gene expression results with pathway
+    enrichment and large language models (LLMs). Supports directional
+    over-representation analysis and preranked gene set enrichment analysis.
+    Prompts provide pathway statistics and genes to OpenAI-compatible models.
+    The package checks reported pathway names and driver genes against the
+    supplied evidence, reports agreement across models, and renders HTML
+    reports of proposed mechanisms.
 License: MIT + file LICENSE
+Depends: R (>= 4.1.0)
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
-RoxygenNote: 7.3.2
 Imports:
     httr2 (>= 1.0.0),
     jsonlite,
@@ -27,13 +24,14 @@ Imports:
     stats,
     utils
 Suggests:
-    clusterProfiler,
-    org.Hs.eg.db,
+    fgsea,
     GO.db,
     rmarkdown,
     knitr,
-    testthat (>= 3.0.0)
+    testthat (>= 3.2.0),
+    withr
 VignetteBuilder: knitr
 Config/testthat/edition: 3
 URL: https://github.com/omixcore/DEGinsight
 BugReports: https://github.com/omixcore/DEGinsight/issues
+Config/roxygen2/version: 8.1.0

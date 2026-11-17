@@ -30,16 +30,20 @@
 validate_terms <- function(interpretation, reference_terms, input_pathways) {
   hyps <- interpretation$hypotheses %||% list()
 
-  cited <- unique(unlist(lapply(hyps, function(h) h$supporting_pathways)))
-  cited <- cited[nzchar(cited)]
+  cited <- as.character(unlist(lapply(hyps, function(h) h$supporting_pathways)))
+  cited <- trimws(cited[!is.na(cited)])
+  cited <- cited[nzchar(cited) & !duplicated(tolower(cited))]
+  input_match <- match(tolower(cited), tolower(input_pathways))
+  grounded <- unique(input_pathways[stats::na.omit(input_match)])
 
-  ok <- tolower(unique(c(reference_terms, input_pathways)))
+  ok <- tolower(trimws(unique(c(reference_terms, input_pathways))))
   is_valid <- tolower(cited) %in% ok
   hallucinated <- cited[!is_valid]
 
   per_hyp <- if (length(hyps)) {
     do.call(rbind, lapply(hyps, function(h) {
-      sp <- unlist(h$supporting_pathways %||% character(0))
+      sp <- trimws(as.character(unlist(h$supporting_pathways)))
+      sp <- sp[!is.na(sp) & nzchar(sp)]
       data.frame(
         hypothesis = h$name %||% NA_character_,
         n_cited = length(sp),
@@ -51,6 +55,8 @@ validate_terms <- function(interpretation, reference_terms, input_pathways) {
 
   list(
     cited = cited,
+    grounded = grounded,
+    unsupported_pathways = cited[is.na(input_match)],
     hallucinated = hallucinated,
     hallucination_rate = if (length(cited)) length(hallucinated) / length(cited) else 0,
     per_hypothesis = per_hyp

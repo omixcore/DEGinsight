@@ -3,7 +3,7 @@ title: "Interpretation is not recovery: a mechanism-recovery benchmark for LLM-a
 differential expression analysis"
 author:
   - "DEGinsight project^1^"
-date: "`r format(Sys.Date(), '%d %B %Y')` — draft for bioRxiv"
+date: "`r format(Sys.Date(), '%d %B %Y')` — archived exploratory draft"
 output:
   html_document:
     toc: false
@@ -14,6 +14,8 @@ output:
   word_document:
     fig_caption: true
 ---
+
+> Archived exploratory analysis. The [revised benchmark](../benchmark/README.md) uses a different statistical and scoring protocol.
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE,

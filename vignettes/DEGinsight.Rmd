@@ -16,13 +16,12 @@ knitr::opts_chunk$set(collapse = TRUE, comment = "#>", eval = FALSE)
 DEGinsight turns a differential-expression result into evidence-graded,
 ontology-grounded mechanistic hypotheses. The pipeline has four stages:
 
-1. **Enrichment** — `run_ora()` (built-in) or any `clusterProfiler` result.
+1. **Enrichment** — `run_ora()`, `run_gsea()`, or an enrichment table mapped to the package format.
 2. **Prompting** — `build_interpretation_prompt()` grounds the LLM with the
    exact enriched terms, statistics and overlapping genes.
 3. **Interpretation** — `interpret_enrichment()` (single model) or
    `interpret_ensemble()` (multi-model majority vote).
-4. **Auditing** — `validate_terms()` flags hallucinated pathway names and
-   computes the hallucination rate.
+4. **Auditing** — cited pathways and driver genes are checked against what appeared in the prompt.
 
 ## Setup
 
@@ -32,7 +31,7 @@ library(DEGinsight)
 # Any OpenAI-compatible endpoint works. Examples: DeepSeek, OpenAI, Moonshot,
 # local Ollama (http://localhost:11434/v1).
 Sys.setenv(LLM_API_KEY = "sk-...")
-Sys.setenv(LLM_BASE_URL = "https://api.deepseek.com/v1")
+Sys.setenv(LLM_BASE_URL = "https://api.deepseek.com")
 ```
 
 **Privacy note**: prompts contain pathway names and gene symbols. For
@@ -47,7 +46,7 @@ data(example_data)   # example_deg, example_gene_sets, example_ora
 # (optional) estimate cost before spending anything
 estimate_cost(example_ora, contrast = "TNF-stimulated vs control HeLa cells",
               species = "Homo sapiens",
-              models = c("deepseek-chat", "kimi-k2"))
+              models = c("deepseek-flash", "deepseek-v4-pro"))
 
 # single-model interpretation
 res <- interpret_enrichment(
@@ -56,7 +55,7 @@ res <- interpret_enrichment(
   species  = "Homo sapiens",
   tissue   = "HeLa",
   direction = "up",
-  model = "deepseek-chat"
+  model = "deepseek-flash"
 )
 res
 ```
@@ -69,7 +68,7 @@ out <- interpret_deg(
   gene_col = "symbol", padj_col = "padj", logfc_col = "log2FoldChange",
   gene_sets = example_gene_sets,
   contrast = "TNF-stimulated vs control", species = "Homo sapiens",
-  models = c("deepseek-chat", "kimi-k2")   # ensemble mode
+  models = c("deepseek-flash", "deepseek-v4-pro")   # ensemble mode
 )
 out$interpretation$consensus
 ```
@@ -106,6 +105,6 @@ render_report(out$ora, out$interpretation,
 
 - All LLM calls default to `temperature = 0`.
 - Responses are cached on disk (see `DEGinsight_cache()`): re-running a
-  vignette or benchmark is deterministic and free. Cache keys hash the full
-  request, including the model name.
+  request can reuse a successful cached response. Cache keys include the API
+  endpoint, model and request body.
 - Record model IDs and dates in publications; frontier models drift.

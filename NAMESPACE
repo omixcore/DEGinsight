@@ -8,24 +8,29 @@ export(call_llm)
 export(estimate_cost)
 export(go_vocabulary)
 export(interpret_deg)
-export(interpret_ensemble)
 export(interpret_enrichment)
+export(interpret_ensemble)
 export(judge_mechanism)
 export(majority_vote)
-export(score_recovery_keywords)
 export(read_gmt)
 export(render_report)
+export(run_gsea)
 export(run_ora)
+export(score_recovery_keywords)
 export(validate_terms)
-importFrom(digest,digest)
-importFrom(httr2,req_body_json)
-importFrom(httr2,req_headers)
-importFrom(httr2,req_perform)
-importFrom(httr2,req_retry)
-importFrom(httr2,request)
-importFrom(httr2,resp_body_json)
-importFrom(jsonlite,fromJSON)
-importFrom(jsonlite,toJSON)
-importFrom(stats,p.adjust)
-importFrom(stats,phyper)
-importFrom(utils,head)
+importFrom(httr2,
+  req_body_json,
+  req_headers,
+  req_perform,
+  req_retry,
+  request,
+  resp_body_json
+)
+importFrom(jsonlite,
+  fromJSON,
+  toJSON
+)
+importFrom(stats,
+  p.adjust,
+  phyper
+)

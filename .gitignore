@@ -9,3 +9,5 @@ inst/doc
 deginsight_cache/
 benchmark/geo_cache/
 benchmark/deg_tables/
+
+benchmark/revised/

@@ -15,7 +15,7 @@
 #'
 #' @param prompt Character scalar. The user prompt.
 #' @param system Character scalar or NULL. Optional system prompt.
-#' @param model Model identifier, e.g. `"deepseek-chat"`, `"gpt-4o-mini"`,
+#' @param model Model identifier, e.g. `"deepseek-flash"`, `"gpt-4o-mini"`,
 #'   `"qwen2.5:14b"` (Ollama).
 #' @param base_url API endpoint. Defaults to the environment variable
 #'   `LLM_BASE_URL`, falling back to DeepSeek's public endpoint.
@@ -34,7 +34,7 @@
 #'
 #' @examples
 #' \dontrun{
-#' Sys.setenv(LLM_API_KEY = "sk-...", LLM_BASE_URL = "https://api.deepseek.com/v1")
+#' Sys.setenv(LLM_API_KEY = "sk-...", LLM_BASE_URL = "https://api.deepseek.com")
 #' call_llm("Reply with {\"ok\": true}",
 #'          response_schema = list(ok = "logical"))
 #' }
@@ -44,8 +44,8 @@
 #' @export
 call_llm <- function(prompt,
                      system = NULL,
-                     model = "deepseek-chat",
-                     base_url = Sys.getenv("LLM_BASE_URL", "https://api.deepseek.com/v1"),
+                     model = "deepseek-flash",
+                     base_url = Sys.getenv("LLM_BASE_URL", "https://api.deepseek.com"),
                      api_key = Sys.getenv("LLM_API_KEY"),
                      response_schema = NULL,
                      temperature = 0,
@@ -71,8 +71,10 @@ call_llm <- function(prompt,
   )
   body <- list(model = model, messages = messages, temperature = temperature)
 
-  cache_key <- digest::digest(list(body = body, schema = response_schema),
-                              algo = "sha256")
+  if (!is.null(response_schema)) body$response_format <- list(type = "json_object")
+  endpoint <- paste0(sub("/+$", "", base_url), "/chat/completions")
+  cache_key <- digest::digest(list(endpoint = endpoint, body = body,
+                                   schema = response_schema), algo = "sha256")
   if (use_cache) {
     hit <- cache_get(cache_key)
     if (!is.null(hit)) {
@@ -81,25 +83,32 @@ call_llm <- function(prompt,
     }
   }
 
-  # DeepSeek requires json_object mode (and the word "json" in the prompt)
-  # only when we actually ask for structured output.
-  if (!is.null(response_schema)) {
-    body$response_format <- list(type = "json_object")
-  }
-
-  req <- httr2::request(paste0(base_url, "/chat/completions")) |>
+  req <- httr2::request(endpoint) |>
     httr2::req_headers(
       Authorization = paste("Bearer", api_key),
       `Content-Type` = "application/json"
     ) |>
     httr2::req_body_json(body) |>
-    httr2::req_retry(max_tries = max_retry, backoff = ~ 2^.x)
+    httr2::req_timeout(180) |>
+    httr2::req_retry(max_tries = max_retry, retry_on_failure = TRUE,
+                     is_transient = function(resp) httr2::resp_status(resp) %in%
+                       c(408L, 429L, 500L, 502L, 503L, 504L))
 
   resp <- httr2::req_perform(req)
   payload <- httr2::resp_body_json(resp)
 
-  text <- payload$choices[[1]]$message$content
+  choice <- if (length(payload$choices)) payload$choices[[1]] else NULL
+  text <- choice$message$content
+  if (!is.character(text) || length(text) != 1L || !nzchar(trimws(text)) ||
+      identical(choice$finish_reason, "length")) stop("Empty or truncated LLM response.")
   out <- if (is.null(response_schema)) text else parse_json_safely(text)
+  if (!is.null(response_schema) &&
+      (is.null(names(out)) || !all(names(response_schema) %in% names(out)))) {
+    stop("LLM response is missing required JSON fields.")
+  }
+  if (identical(names(response_schema), c("hypotheses", "flagged_pathways", "overall_summary"))) {
+    validate_interpretation_response(out)
+  }
 
   attr(out, "model") <- model
   attr(out, "usage") <- payload$usage
@@ -119,9 +128,30 @@ parse_json_safely <- function(text) {
       # last resort: extract the outermost {...} block
       m <- regmatches(text, regexpr("\\{.*\\}", text, perl = TRUE))
       if (length(m) == 0 || !nzchar(m)) {
-        stop("LLM output is not parseable JSON:\n", text, call. = FALSE)
+        stop("LLM output is not parseable JSON.", call. = FALSE)
       }
       jsonlite::fromJSON(m, simplifyVector = FALSE)
     }
   )
+}
+
+#' @noRd
+validate_interpretation_response <- function(out) {
+  scalar_string <- function(x) is.character(x) && length(x) == 1L && !is.na(x)
+  array <- function(x) is.list(x) && is.null(names(x))
+  strings <- function(x) array(x) && all(vapply(x, scalar_string, logical(1)))
+  hypothesis <- function(h) {
+    is.list(h) && all(vapply(h[c("name", "mechanism", "follow_up_experiment")],
+                             scalar_string, logical(1))) &&
+      strings(h$supporting_pathways) && strings(h$driver_genes) &&
+      scalar_string(h$evidence_grade) &&
+      h$evidence_grade %in% c("strong", "moderate", "speculative")
+  }
+  flag <- function(x) is.list(x) && scalar_string(x$pathway) && scalar_string(x$reason)
+  if (!scalar_string(out$overall_summary) || !array(out$hypotheses) ||
+      length(out$hypotheses) > 5L || !all(vapply(out$hypotheses, hypothesis, logical(1))) ||
+      !array(out$flagged_pathways) || !all(vapply(out$flagged_pathways, flag, logical(1)))) {
+    stop("Invalid LLM interpretation response structure.", call. = FALSE)
+  }
+  invisible(out)
 }
